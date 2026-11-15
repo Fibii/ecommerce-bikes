@@ -349,14 +349,14 @@ How the configurator gets its live price:
 
 **Decision.**
 
-| Endpoint                          | Body or query                                          | Success                                        | Expected failures                                                                                                                         |
-| --------------------------------- | ------------------------------------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/cart/lines`            | `{ bikeId, accessories: [{ accessoryId, quantity }] }` | 201 `CartView` (sets `cart_id` if missing)     | 400 `invalid-request`; 422 `unknown-bike`, `unknown-accessory`, `incompatible-accessory`, `quantity-out-of-range`                         |
-| `DELETE /api/cart/lines/{lineId}` | none                                                   | 200 `CartView`                                 | 404 `line-not-found`                                                                                                                      |
-| `DELETE /api/cart`                | none                                                   | 200 `CartView` (empty)                         | none                                                                                                                                      |
-| `GET /api/availability?ids=…`     | product ids                                            | 200 `{ items: [{ productId, available }] }`    | 400 `invalid-request`; 503 `stock-unavailable`                                                                                            |
-| `POST /api/checkout`              | header `Idempotency-Key`                               | 200 `{ status: "confirmed", orderId, totals }` | 409 `shortfall` with `details.items: [{ productId, requested, available }]`; 409 `cart-empty`; 503 `stock-unavailable` with `Retry-After` |
-| `POST /api/revalidate`            | secret header                                          | 204                                            | 401                                                                                                                                       |
+| Endpoint                          | Body or query                                          | Success                                        | Expected failures                                                                                                                                                                                         |
+| --------------------------------- | ------------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/cart/lines`            | `{ bikeId, accessories: [{ accessoryId, quantity }] }` | 201 `CartView` (sets `cart_id` if missing)     | 400 `invalid-request`; 422 `unknown-bike`, `unknown-accessory`, `incompatible-accessory`, `quantity-out-of-range`                                                                                         |
+| `DELETE /api/cart/lines/{lineId}` | none                                                   | 200 `CartView`                                 | 404 `line-not-found`                                                                                                                                                                                      |
+| `DELETE /api/cart`                | none                                                   | 200 `CartView` (empty)                         | none                                                                                                                                                                                                      |
+| `GET /api/availability?ids=…`     | product ids                                            | 200 `{ items: [{ productId, available }] }`    | 400 `invalid-request`; 503 `stock-unavailable`                                                                                                                                                            |
+| `POST /api/checkout`              | header `Idempotency-Key`                               | 200 `{ status: "confirmed", orderId, totals }` | 400 `invalid-request` (missing or malformed `Idempotency-Key`); 409 `shortfall` with `details.items: [{ productId, requested, available }]`; 409 `cart-empty`; 503 `stock-unavailable` with `Retry-After` |
+| `POST /api/revalidate`            | secret header                                          | 204                                            | 401 `unauthorized`                                                                                                                                                                                        |
 
 - No price ever appears in a request body.
 - `CartView` is the server-priced projection: lines with positions; net, tax and gross per line; cart totals; all in cents. Formatting is the UI's job.
@@ -365,7 +365,7 @@ How the configurator gets its live price:
 - Removing a line that does not exist returns 404 `line-not-found`. The UI treats it as already removed and refreshes.
 - Handlers read the cart id from the `NextRequest` and set it on the `NextResponse`, not through `cookies()`.
 - Handlers run on the Node.js runtime (in-memory state, `fs`).
-- Status rule: 400 the request is malformed; 422 it is well-formed but breaks a domain rule; 409 it conflicts with current state; 503 a dependency failed and retrying may work.
+- Status rule: 400 the request is malformed; 401 the caller lacks the secret; 422 it is well-formed but breaks a domain rule; 409 it conflicts with current state; 503 a dependency failed and retrying may work.
 
 **Context.** The brief wants at least one Route Handler; the settled write flow makes Route Handlers the only write path. Open were: which endpoints exist, what they return, and how a `Result` maps to HTTP.
 
