@@ -1,0 +1,7 @@
+# Files that are kept exactly as provided.
+/AGENTS.md
+/data
+/docs
+
+# Lockfile
+package-lock.json
