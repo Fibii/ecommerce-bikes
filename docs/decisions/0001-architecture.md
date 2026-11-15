@@ -349,18 +349,19 @@ How the configurator gets its live price:
 
 **Decision.**
 
-| Endpoint                          | Body or query                                          | Success                                        | Expected failures                                                                                                                                       |
-| --------------------------------- | ------------------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /api/cart/lines`            | `{ bikeId, accessories: [{ accessoryId, quantity }] }` | 201 `CartView` (sets `cart_id` if missing)     | 400 `invalid-request`; 422 `unknown-bike`, `unknown-accessory`, `incompatible-accessory`, `quantity-out-of-range`                                       |
-| `DELETE /api/cart/lines/{lineId}` | none                                                   | 200 `CartView`                                 | 404 `line-not-found`                                                                                                                                    |
-| `DELETE /api/cart`                | none                                                   | 200 `CartView` (empty)                         | none                                                                                                                                                    |
-| `GET /api/availability?ids=…`     | product ids                                            | 200 `{ items: [{ productId, available }] }`    | 400 `invalid-request`; 503 `stock-unavailable`                                                                                                          |
-| `POST /api/checkout`              | header `Idempotency-Key`                               | 200 `{ status: "confirmed", orderId, totals }` | 409 `{ status: "shortfall", items: [{ productId, requested, available }] }`; 409 `cart-empty`; 503 `{ status: "stock-unavailable" }` with `Retry-After` |
-| `POST /api/revalidate`            | secret header                                          | 204                                            | 401                                                                                                                                                     |
+| Endpoint                          | Body or query                                          | Success                                        | Expected failures                                                                                                                         |
+| --------------------------------- | ------------------------------------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/cart/lines`            | `{ bikeId, accessories: [{ accessoryId, quantity }] }` | 201 `CartView` (sets `cart_id` if missing)     | 400 `invalid-request`; 422 `unknown-bike`, `unknown-accessory`, `incompatible-accessory`, `quantity-out-of-range`                         |
+| `DELETE /api/cart/lines/{lineId}` | none                                                   | 200 `CartView`                                 | 404 `line-not-found`                                                                                                                      |
+| `DELETE /api/cart`                | none                                                   | 200 `CartView` (empty)                         | none                                                                                                                                      |
+| `GET /api/availability?ids=…`     | product ids                                            | 200 `{ items: [{ productId, available }] }`    | 400 `invalid-request`; 503 `stock-unavailable`                                                                                            |
+| `POST /api/checkout`              | header `Idempotency-Key`                               | 200 `{ status: "confirmed", orderId, totals }` | 409 `shortfall` with `details.items: [{ productId, requested, available }]`; 409 `cart-empty`; 503 `stock-unavailable` with `Retry-After` |
+| `POST /api/revalidate`            | secret header                                          | 204                                            | 401                                                                                                                                       |
 
 - No price ever appears in a request body.
 - `CartView` is the server-priced projection: lines with positions; net, tax and gross per line; cart totals; all in cents. Formatting is the UI's job.
-- One error envelope: `{ error: { code, message, details? } }`. `code` is a closed union in `contracts/`; the UI switches on it, never on message text.
+- One error envelope for every non-2xx response, checkout included: `{ error: { code, message, details? } }`. `code` is a closed union in `contracts/`; the UI switches on it, never on message text. The failures column lists these codes.
+- `CheckoutResult` stays the application's discriminated union. The checkout handler maps `confirmed` to the 200 body and each failure variant to the envelope: `shortfall` (409, the short positions in `details.items`), `cart-empty` (409) and `stock-unavailable` (503, the same code as `GET /api/availability`).
 - Removing a line that does not exist returns 404 `line-not-found`. The UI treats it as already removed and refreshes.
 - Handlers read the cart id from the `NextRequest` and set it on the `NextResponse`, not through `cookies()`.
 - Handlers run on the Node.js runtime (in-memory state, `fs`).
@@ -374,7 +375,7 @@ How the configurator gets its live price:
 - **Reading and setting the cookie through `cookies()`.** Not used in handlers: with the id taken from the request and set on the response, a Jest test can call a handler with a plain `Request`.
 - **Answering success when the line to remove is already gone.** Not chosen: 404 `line-not-found` is consistent with `removeLine` returning a typed error in the domain. The customer sees no difference, because the UI treats the 404 as already removed.
 
-**Reason.** The stock outcomes are distinct statuses with typed bodies, so "the stock service is failing" is a first-class response and can be asserted over HTTP. Criteria: stock, tests.
+**Reason.** The stock outcomes are distinct HTTP statuses with distinct error codes in one envelope, so "the stock service is failing" is a first-class response and can be asserted over HTTP. Criteria: stock, tests.
 
 ## A7. Does "Add to cart" consult the stock service?
 
