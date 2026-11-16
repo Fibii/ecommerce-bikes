@@ -91,7 +91,12 @@ async function placeOrder(
   // Only the lines that were paid for go. A line added while the reservation
   // was running stays in the cart.
   await deps.carts.update(id, (current) =>
-    ok(removeLines(current, cart.lines.map((line) => line.id))),
+    ok(
+      removeLines(
+        current,
+        cart.lines.map((line) => line.id),
+      ),
+    ),
   );
   return {
     status: "confirmed",

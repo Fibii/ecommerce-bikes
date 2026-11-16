@@ -28,6 +28,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        <a
+          href="#main"
+          className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-20 focus:rounded-card focus:bg-surface focus:px-3 focus:py-2 focus:outline-2 focus:outline-primary"
+        >
+          Skip to content
+        </a>
         <header className="border-b border-line bg-surface">
           <nav className="mx-auto flex max-w-6xl items-center justify-between p-4 sm:px-6">
             <Link href="/" className="font-semibold">

@@ -66,6 +66,9 @@ describe("checkout result", () => {
     expect(
       screen.getByRole("link", { name: "Configure another bike" }),
     ).toBeTruthy();
+
+    // Place order is gone; focus moves to the result instead of the page top.
+    expect(document.activeElement?.textContent).toContain("Order confirmed");
   });
 
   it("lists the shortfall with requested and available", async () => {
