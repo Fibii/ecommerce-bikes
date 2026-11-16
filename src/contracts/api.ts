@@ -105,6 +105,7 @@ export const ERROR_CODES = [
   "line-not-found",
   "cart-empty",
   "stock-unavailable",
+  "unauthorized",
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
