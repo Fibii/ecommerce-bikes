@@ -94,4 +94,47 @@ The brief asks for a record of what was deliberately left out. Reasons are in [0
 
 ## Deployment
 
-Run `npm run build` and then `npm start` on any host that keeps one Node.js process alive (a VM, a container, a long-running PaaS service). Because carts, stock and idempotency records are held in process memory, do not run several instances behind a load balancer and do not use a serverless platform such as Vercel: each invocation would see its own cart and stock. Moving to several instances needs a shared store, which is one new adapter for `CartRepository`, `StockService` and `IdempotencyStore`. Set the `STOCK_*` variables above to tune the simulated stock service, and `REVALIDATE_SECRET` to enable cache revalidation.
+The app deploys to **Google Cloud Run** as **one instance**. Carts, stock
+reservations and idempotency keys live in process memory, so the script pins
+`--min-instances=1 --max-instances=1 --concurrency=80 --no-cpu-throttling`.
+Never raise the instance count. Any new revision or restart replaces the
+process and **loses all open carts**.
+
+```bash
+PROJECT=my-proj REGION=europe-west1 npm run deploy -- --dry-run   # print steps only
+PROJECT=my-proj REGION=europe-west1 REVALIDATE_SECRET=change-me npm run deploy
+```
+
+`scripts/deploy.sh` runs `gcloud run deploy --source .`: Cloud Build builds the
+`Dockerfile` (exact Node version, non-root `app` user, listens on `$PORT`,
+default 8080) and Cloud Run serves it. You need the `gcloud` CLI, a project with
+billing and the Cloud Run, Cloud Build and Artifact Registry APIs enabled, and
+`gcloud auth login`. The service allows unauthenticated access (public shop).
+
+**Environment variables:** `PROJECT` and `REGION` (required), `SERVICE`
+(default `bikes`), `REVALIDATE_SECRET` (without it `POST /api/revalidate`
+refuses every request), `STOCK_FAILURE_RATE`, `STOCK_LATENCY_MIN_MS`,
+`STOCK_LATENCY_MAX_MS`, `STOCK_SEED`, and `HEALTH_TIMEOUT` (seconds, default
+60). They reach the service through `--set-env-vars`, which stores them in
+plain text in the revision. For the secret, prefer Secret Manager: create the
+secret, then run `gcloud run services update bikes --region REGION
+--update-secrets=REVALIDATE_SECRET=revalidate-secret:latest` and leave
+`REVALIDATE_SECRET` unset when running the script.
+
+**HTTPS:** Cloud Run terminates TLS. The cart cookie is `Secure` in
+production, so browsers drop it over plain http except on `http://localhost`,
+where testing works.
+
+**Cache:** the catalog is cached in the server and refreshed in the background
+after `POST /api/revalidate` with the `x-revalidate-secret` header. The cache is
+per process, which is another reason for a single instance.
+
+**Rollback:** the script records the latest ready revision first. If the deploy
+fails, Cloud Run keeps serving that revision. If it succeeds but
+`GET <service url>/api/health` is not OK within `HEALTH_TIMEOUT`, the script
+runs `gcloud run services update-traffic --to-revisions=<previous>=100`.
+Shifting traffic lands users on a different process, so carts are lost. The
+rollback pins traffic to that revision, so every deploy first runs
+`gcloud run services update-traffic --to-latest` to restore latest-revision routing.
+
+Test the script's argument handling with `npm run test:deploy`.
