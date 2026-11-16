@@ -17,7 +17,7 @@ const ENV = {
 
 const globals = globalThis as { __bikesApp?: unknown };
 
-function useStock(override: Partial<StockService> = {}) {
+function installStock(override: Partial<StockService> = {}) {
   const adapters = createAdapters(ENV);
   const real = adapters.stock;
   const stock: StockService = {
@@ -28,7 +28,7 @@ function useStock(override: Partial<StockService> = {}) {
   globals.__bikesApp = createApp({ ...adapters, stock });
 }
 
-beforeEach(() => useStock());
+beforeEach(() => installStock());
 afterAll(() => delete globals.__bikesApp);
 
 function call(
@@ -121,6 +121,74 @@ describe("POST /api/cart/lines", () => {
   });
 });
 
+describe("POST /api/cart/lines, further rejections", () => {
+  it("422 duplicate-accessory when an accessory is listed twice", async () => {
+    const res = await addLine(
+      call("POST", "/api/cart/lines", { body: bundle([helmet(1), helmet(1)]) }),
+    );
+
+    expect(res.status).toBe(422);
+    expect(await errorOf(res)).toMatchObject({ code: "duplicate-accessory" });
+    expect(res.cookies.get("cart_id")).toBeUndefined();
+  });
+
+  it.each([
+    ["a negative quantity", helmet(-1)],
+    ["a quantity above the accessory's maximum", helmet(5)],
+  ])("422 quantity-out-of-range for %s", async (_name, line) => {
+    const res = await addLine(
+      call("POST", "/api/cart/lines", { body: bundle([line]) }),
+    );
+
+    expect(res.status).toBe(422);
+    expect(await errorOf(res)).toMatchObject({
+      code: "quantity-out-of-range",
+    });
+  });
+
+  it.each([
+    ["accessories missing", { bikeId: "bike-001" }],
+    ["a bike id that is not a string", { bikeId: 7, accessories: [] }],
+    ["an empty bike id", { bikeId: "", accessories: [] }],
+    [
+      "a quantity that is a string",
+      bundle([{ accessoryId: "acc-001", quantity: "2" }]),
+    ],
+    ["an accessory without an id", bundle([{ quantity: 1 }])],
+    ["a null body", null],
+  ])("400 invalid-request for %s", async (_name, body) => {
+    const res = await addLine(call("POST", "/api/cart/lines", { body }));
+
+    expect(res.status).toBe(400);
+    expect((await errorOf(res)).code).toBe("invalid-request");
+    expect(res.cookies.get("cart_id")).toBeUndefined();
+  });
+
+  it("ignores prices sent by the client and prices the line from the catalog", async () => {
+    const honest = await (
+      await addLine(
+        call("POST", "/api/cart/lines", { body: bundle([helmet(2)]) }),
+      )
+    ).json();
+
+    const res = await addLine(
+      call("POST", "/api/cart/lines", {
+        body: {
+          ...bundle([{ ...helmet(2), netPrice: 1, price: 1 }]),
+          netPrice: 1,
+          price: 1,
+          totals: { net: 1, tax: 0, gross: 1 },
+        },
+      }),
+    );
+
+    expect(res.status).toBe(201);
+    const cart = await res.json();
+    expect(cart.totals).toEqual(honest.totals);
+    expect(cart.totals.net).toBeGreaterThan(1);
+  });
+});
+
 describe("DELETE /api/cart/lines/{lineId}", () => {
   it("200 returns the cart without the line", async () => {
     const { cookie, lineId } = await cartWithOneLine();
@@ -199,7 +267,7 @@ describe("GET /api/availability", () => {
   });
 
   it("503 stock-unavailable when the stock service fails", async () => {
-    useStock({
+    installStock({
       availability: async () => err({ code: "stock-unavailable" as const }),
     });
 
@@ -216,7 +284,7 @@ describe("POST /api/checkout", () => {
   const key = { "Idempotency-Key": "k1" };
 
   it("200 confirmed with order id and totals, and empties the cart", async () => {
-    useStock({ reserve: async () => ok(undefined) });
+    installStock({ reserve: async () => ok(undefined) });
     const { cookie } = await cartWithOneLine();
 
     const res = await checkout(
@@ -235,7 +303,7 @@ describe("POST /api/checkout", () => {
 
   it("409 shortfall lists the short items", async () => {
     const items = [{ productId: "bike-001", requested: 1, available: 0 }];
-    useStock({
+    installStock({
       reserve: async () => err({ code: "shortfall" as const, items } as never),
     });
     const { cookie } = await cartWithOneLine();
@@ -260,7 +328,7 @@ describe("POST /api/checkout", () => {
   });
 
   it("503 stock-unavailable with Retry-After", async () => {
-    useStock({
+    installStock({
       reserve: async () => err({ code: "stock-unavailable" as const }),
     });
     const { cookie } = await cartWithOneLine();
@@ -284,7 +352,7 @@ describe("POST /api/checkout", () => {
   });
 
   it("replays the stored order for a repeated key", async () => {
-    useStock({ reserve: async () => ok(undefined) });
+    installStock({ reserve: async () => ok(undefined) });
     const { cookie } = await cartWithOneLine();
     const send = () =>
       checkout(call("POST", "/api/checkout", { cookie, headers: key }));
@@ -293,5 +361,104 @@ describe("POST /api/checkout", () => {
     const second = await (await send()).json();
 
     expect(second).toEqual(first);
+  });
+});
+
+describe("concurrent POST /api/checkout", () => {
+  function countingStock(delayMs = 20) {
+    const reservations: unknown[] = [];
+    installStock({
+      reserve: async (items) => {
+        reservations.push(items);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        return ok(undefined);
+      },
+    });
+    return reservations;
+  }
+  const send = (cookie: string, k: string) =>
+    checkout(
+      call("POST", "/api/checkout", {
+        cookie,
+        headers: { "Idempotency-Key": k },
+      }),
+    );
+
+  it("one order and one reservation for requests that share a key", async () => {
+    const reservations = countingStock();
+    const { cookie } = await cartWithOneLine();
+
+    const responses = await Promise.all(
+      Array.from({ length: 5 }, () => send(cookie, "same")),
+    );
+
+    const bodies = await Promise.all(responses.map((res) => res.json()));
+    expect(responses.map((res) => res.status)).toEqual([
+      200, 200, 200, 200, 200,
+    ]);
+    expect(new Set(bodies.map((body) => body.orderId)).size).toBe(1);
+    expect(reservations).toHaveLength(1);
+  });
+
+  it("reserves the lines of one cart once when keys differ", async () => {
+    const reservations = countingStock();
+    const { cookie } = await cartWithOneLine();
+
+    const responses = await Promise.all(
+      ["a", "b", "c"].map((k) => send(cookie, k)),
+    );
+
+    // Keys differ, so each is its own checkout, but the same lines must not be
+    // reserved (paid) twice: every call is answered by the one reservation.
+    expect(responses.map((res) => res.status)).toEqual([200, 200, 200]);
+    expect(reservations).toHaveLength(1);
+    const cart = await clearCart(call("DELETE", "/api/cart", { cookie }));
+    expect((await cart.json()).lines).toEqual([]);
+  });
+});
+
+describe("POST /api/checkout while a line is added", () => {
+  it("keeps a line added during the reservation in the cart", async () => {
+    let release!: () => void;
+    let reserving!: () => void;
+    const started = new Promise<void>((resolve) => (reserving = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    installStock({
+      reserve: async () => {
+        reserving();
+        await gate;
+        return ok(undefined);
+      },
+    });
+    const { cookie, lineId } = await cartWithOneLine();
+
+    const pending = checkout(
+      call("POST", "/api/checkout", {
+        cookie,
+        headers: { "Idempotency-Key": "k-during" },
+      }),
+    );
+    await started;
+    const added = await addLine(
+      call("POST", "/api/cart/lines", { body: bundle(), cookie }),
+    );
+    const newLineId = (await added.json()).lines[1].id as string;
+    release();
+    const res = await pending;
+
+    expect(res.status).toBe(200);
+    const left = await (
+      await removeLine(
+        call("DELETE", `/api/cart/lines/${newLineId}`, { cookie }),
+        { params: Promise.resolve({ lineId: newLineId }) },
+      )
+    ).json();
+    // The new line was still there to remove; the paid line is gone.
+    expect(left.lines).toEqual([]);
+    const gone = await removeLine(
+      call("DELETE", `/api/cart/lines/${lineId}`, { cookie }),
+      { params: Promise.resolve({ lineId }) },
+    );
+    expect(gone.status).toBe(404);
   });
 });

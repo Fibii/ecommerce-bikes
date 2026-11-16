@@ -54,3 +54,26 @@ describe("InMemoryCartRepository", () => {
     expect((await repository.get(ID))?.lines).toHaveLength(3);
   });
 });
+
+describe("InMemoryCartRepository atomicity", () => {
+  // The guarantee is "nothing awaits between read and write", so a change runs
+  // synchronously inside update(), and each change sees the previous write.
+  // The port types `change` as synchronous; a change that returned a Promise
+  // is unsupported. An `await` added before the change would fail this test.
+  it("runs each change synchronously on the latest cart, so unawaited updates serialize", async () => {
+    const repository = new InMemoryCartRepository();
+    const bundle = must(createBundle(touringVoyager, []));
+    const seen: number[] = [];
+    const add = (line: string) =>
+      repository.update(ID, (cart) => {
+        seen.push(cart.lines.length);
+        return addBundle(cart, must(cartLineId(line)), bundle);
+      });
+
+    const pending = [add("l-1"), add("l-2"), add("l-3")];
+
+    expect(seen).toEqual([0, 1, 2]); // before any await
+    await Promise.all(pending);
+    expect((await repository.get(ID))?.lines).toHaveLength(3);
+  });
+});
