@@ -121,6 +121,74 @@ describe("POST /api/cart/lines", () => {
   });
 });
 
+describe("POST /api/cart/lines, further rejections", () => {
+  it("422 duplicate-accessory when an accessory is listed twice", async () => {
+    const res = await addLine(
+      call("POST", "/api/cart/lines", { body: bundle([helmet(1), helmet(1)]) }),
+    );
+
+    expect(res.status).toBe(422);
+    expect(await errorOf(res)).toMatchObject({ code: "duplicate-accessory" });
+    expect(res.cookies.get("cart_id")).toBeUndefined();
+  });
+
+  it.each([
+    ["a negative quantity", helmet(-1)],
+    ["a quantity above the accessory's maximum", helmet(5)],
+  ])("422 quantity-out-of-range for %s", async (_name, line) => {
+    const res = await addLine(
+      call("POST", "/api/cart/lines", { body: bundle([line]) }),
+    );
+
+    expect(res.status).toBe(422);
+    expect(await errorOf(res)).toMatchObject({
+      code: "quantity-out-of-range",
+    });
+  });
+
+  it.each([
+    ["accessories missing", { bikeId: "bike-001" }],
+    ["a bike id that is not a string", { bikeId: 7, accessories: [] }],
+    ["an empty bike id", { bikeId: "", accessories: [] }],
+    [
+      "a quantity that is a string",
+      bundle([{ accessoryId: "acc-001", quantity: "2" }]),
+    ],
+    ["an accessory without an id", bundle([{ quantity: 1 }])],
+    ["a null body", null],
+  ])("400 invalid-request for %s", async (_name, body) => {
+    const res = await addLine(call("POST", "/api/cart/lines", { body }));
+
+    expect(res.status).toBe(400);
+    expect((await errorOf(res)).code).toBe("invalid-request");
+    expect(res.cookies.get("cart_id")).toBeUndefined();
+  });
+
+  it("ignores prices sent by the client and prices the line from the catalog", async () => {
+    const honest = await (
+      await addLine(
+        call("POST", "/api/cart/lines", { body: bundle([helmet(2)]) }),
+      )
+    ).json();
+
+    const res = await addLine(
+      call("POST", "/api/cart/lines", {
+        body: {
+          ...bundle([{ ...helmet(2), netPrice: 1, price: 1 }]),
+          netPrice: 1,
+          price: 1,
+          totals: { net: 1, tax: 0, gross: 1 },
+        },
+      }),
+    );
+
+    expect(res.status).toBe(201);
+    const cart = await res.json();
+    expect(cart.totals).toEqual(honest.totals);
+    expect(cart.totals.net).toBeGreaterThan(1);
+  });
+});
+
 describe("DELETE /api/cart/lines/{lineId}", () => {
   it("200 returns the cart without the line", async () => {
     const { cookie, lineId } = await cartWithOneLine();
@@ -346,5 +414,51 @@ describe("concurrent POST /api/checkout", () => {
     expect(reservations).toHaveLength(1);
     const cart = await clearCart(call("DELETE", "/api/cart", { cookie }));
     expect((await cart.json()).lines).toEqual([]);
+  });
+});
+
+describe("POST /api/checkout while a line is added", () => {
+  it("keeps a line added during the reservation in the cart", async () => {
+    let release!: () => void;
+    let reserving!: () => void;
+    const started = new Promise<void>((resolve) => (reserving = resolve));
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    installStock({
+      reserve: async () => {
+        reserving();
+        await gate;
+        return ok(undefined);
+      },
+    });
+    const { cookie, lineId } = await cartWithOneLine();
+
+    const pending = checkout(
+      call("POST", "/api/checkout", {
+        cookie,
+        headers: { "Idempotency-Key": "k-during" },
+      }),
+    );
+    await started;
+    const added = await addLine(
+      call("POST", "/api/cart/lines", { body: bundle(), cookie }),
+    );
+    const newLineId = (await added.json()).lines[1].id as string;
+    release();
+    const res = await pending;
+
+    expect(res.status).toBe(200);
+    const left = await (
+      await removeLine(
+        call("DELETE", `/api/cart/lines/${newLineId}`, { cookie }),
+        { params: Promise.resolve({ lineId: newLineId }) },
+      )
+    ).json();
+    // The new line was still there to remove; the paid line is gone.
+    expect(left.lines).toEqual([]);
+    const gone = await removeLine(
+      call("DELETE", `/api/cart/lines/${lineId}`, { cookie }),
+      { params: Promise.resolve({ lineId }) },
+    );
+    expect(gone.status).toBe(404);
   });
 });
