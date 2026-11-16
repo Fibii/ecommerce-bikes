@@ -79,6 +79,7 @@ export class FakeStockService implements StockService {
   private levels = new Map<ProductId, number>();
   private failures = 0;
   private hanging = false;
+  private reserveDelayMs = 0;
 
   /** Sets how many of a product are in stock. */
   stock(productId: ProductId, available: number): this {
@@ -95,6 +96,12 @@ export class FakeStockService implements StockService {
   /** From now on a call never answers, like a service that is down. */
   hang(): this {
     this.hanging = true;
+    return this;
+  }
+
+  /** `reserve` answers only after `ms`, like a slow service. */
+  slowReserve(ms: number): this {
+    this.reserveDelayMs = ms;
     return this;
   }
 
@@ -117,6 +124,9 @@ export class FakeStockService implements StockService {
   ): Promise<Result<void, StockUnavailable | Shortfall>> {
     this.reservations.push(items);
     if (this.hanging) return new Promise(() => undefined);
+    if (this.reserveDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.reserveDelayMs));
+    }
     if (this.takeFailure()) return err({ code: "stock-unavailable" });
 
     const short = items

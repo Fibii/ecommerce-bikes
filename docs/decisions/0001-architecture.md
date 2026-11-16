@@ -21,7 +21,7 @@
 | A8  | The simulated stock service                   | An adapter with injected randomness, latency and settings. E2E tests run two server instances, one that never fails and one that always fails.  |
 | A9  | Resilience policy                             | Availability: 2 s timeout, one retry. Reservation: 3 s timeout, no retry. Checkout sends an `Idempotency-Key`.                                  |
 | A10 | How availability reaches the configurator     | The `BundleBuilder` island fetches it after hydration, once for all products.                                                                   |
-| A11 | Shape of `CartRepository`                     | `get` and `save` in this iteration. The atomic `update` is deferred to the next iteration.                                                      |
+| A11 | Shape of `CartRepository`                     | `get` and an atomic `update(cartId, fn)`. `save` is gone.                                                                                         |
 | A12 | Money and tax arithmetic                      | The catalog adapter validates and converts to integer cents and basis points. One pure `taxOf` in `domain/`, half-up, once per cart line.       |
 | A13 | Bonus scope                                   | Race conditions, A11y and Caching strategy.                                                                                                     |
 | A14 | Order record and tests                        | No order port: checkout returns an order id and totals. Tests at five levels, each asserting observable behaviour.                              |
@@ -96,18 +96,17 @@ sequenceDiagram
   H->>H: parse the body with the contract schema
   H->>U: add the bundle to the cart
   U->>U: read the catalog, build the Bundle
-  U->>R: get(cartId)
-  R-->>U: current Cart
-  U->>D: addBundle(cart, bundle)
-  D-->>U: new Cart or a typed error
-  U->>R: save(cart)
+  U->>R: update(cartId, fn)
+  R->>D: fn: addBundle(current cart, bundle)
+  D-->>R: new Cart or a typed error
+  R-->>U: stored Cart or the error
   U-->>H: Result
   H-->>B: 201 and the priced cart, or 400 / 422 and an error code
   B->>S: router.refresh()
   S-->>B: badge and cart rendered again from the server's cart
 ```
 
-The client never sends a price; the server prices from the catalog. The client keeps no copy of the cart (A2). The `get` and `save` steps are the repository shape of this iteration (A11).
+The client never sends a price; the server prices from the catalog. The client keeps no copy of the cart (A2). The `update` step is atomic (A11).
 
 ## Terms: bundle, cart line, cart
 
@@ -427,6 +426,7 @@ How the configurator gets its live price:
 
 - **Timeouts** turn into `stock-unavailable`, so callers have one failure to handle.
 - **Double submission.** The checkout button disables while pending and sends an `Idempotency-Key`. The key is separate from the cart cookie and is sent only with "Place order". The `IdempotencyStore` returns the stored outcome for a repeated key and shares the in-flight result with a concurrent duplicate, so there is one reservation however often the button is pressed. Only `confirmed` is stored; a transient failure is not, so "Try again" can succeed.
+- **Reservation key.** The reservation call, with its 3 s timeout, is also shared under a key of the cart and its lines, so a duplicate while it runs joins it and a success is not repeated. A timed-out or failed reservation is forgotten and a retry reserves afresh.
 
 **Context.** Handling of the unstable stock service is the second criterion in the brief. Requirement 7 asks for a clear message "including the case where the stock service is currently failing".
 
@@ -464,11 +464,11 @@ Each call site has a stated, different policy with a reason. Criterion: stock.
 
 ## A11. Concurrency: the shape of `CartRepository`
 
-**Decision.** In this iteration `CartRepository` has `get(cartId)` and `save(cart)`. The atomic `update(cartId, fn)` is the design for the next iteration and is deferred (see "Deferred to a later iteration").
+**Decision.** `CartRepository` has `get(cartId)` for reads and the atomic `update(cartId, fn)` for writes. `fn` is a pure domain function returning a new `Cart` or a typed error; the cart is stored only if it succeeds, and updates of one cart never interleave.
 
 - Each cart line gets its own id, so two identical bundles are two lines and are never merged.
-- Until the atomic update lands, two quick adds can lose one. The README lists that as a known limit.
-- The Race conditions bonus (A13) therefore covers, in this iteration, the quantity slider and the double click on "Place order" (the `Idempotency-Key`, A9).
+- Two quick adds therefore both land.
+- The Race conditions bonus (A13) covers the quantity slider, the quick adds (this decision) and the double click on "Place order" (the `Idempotency-Key`, A9).
 - A second known limit for the README: a cart changed in another tab while a checkout is in flight is not guarded against.
 
 **Context.** The Race conditions bonus names two cases: dragging the slider quickly, and adding several times in quick succession.
@@ -480,10 +480,10 @@ Each call site has a stated, different policy with a reason. Criterion: stock.
 
 | Option                                                                                                                                      | For                                                                                                                                                                                     | Against                                                   |
 | ------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| **a. `get(cartId)` and `save(cart)`** (this iteration)                                                                                      | Familiar                                                                                                                                                                                | Lost updates as soon as a use case awaits between the two |
-| b. `update(cartId, fn)` where `fn` is a pure domain function returning a new `Cart` or a typed error, plus `get` for reads (next iteration) | Atomic by contract. The in-memory adapter runs `fn` synchronously; a database adapter would use a transaction. Fits the functional core: `update(id, cart => addBundle(cart, bundle))`. | One method to learn                                       |
+| a. `get(cartId)` and `save(cart)`                                                                                                           | Familiar                                                                                                                                                                                | Lost updates as soon as a use case awaits between the two |
+| b. `update(cartId, fn)` where `fn` is a pure domain function returning a new `Cart` or a typed error, plus `get` for reads (**chosen**) | Atomic by contract. The in-memory adapter runs `fn` synchronously; a database adapter would use a transaction. Fits the functional core: `update(id, cart => addBundle(cart, bundle))`. | One method to learn                                       |
 
-**Reason.** Option b closes the race in the port, where a later database adapter inherits the guarantee, and it remains the target design. It was taken out of this iteration's scope; option a ships with its limit stated instead of hidden. When the port changes, the change goes in its own commit, as the working rules require. Criterion: state.
+**Reason.** Option b closes the race in the port, where a later database adapter inherits the guarantee, and it remains the target design. The port change went in its own commit, as the working rules require. Criterion: state.
 
 ## A12. Money and tax arithmetic
 
@@ -537,7 +537,7 @@ That leaves about 2.5 hours.
 
 | Bonus                     | Hours | What it shows                                                                                                                                          | Decision  |
 | ------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
-| Race conditions           | 1.0   | State and stock handling. The slider and the double submit fall out of A2 and A9; the quick-add case needs the atomic update, which is deferred (A11). | **Build** |
+| Race conditions           | 1.0   | State and stock handling. The slider and the double submit fall out of A2 and A9; the quick-add case is closed by the atomic update (A11).                | **Build** |
 | A11y                      | 1.0   | Quality throughout. Cheap because the primitives use native controls (U10).                                                                            | **Build** |
 | Caching strategy          | 0.5   | Boundary and README. The structure exists (A3, A4); the work is the endpoint and the README paragraph.                                                 | **Build** |
 | Optimistic UI             | 2.0   | Stock and state handling. Highest signal, highest risk; it changes A7.                                                                                 | Deferred  |
@@ -572,7 +572,6 @@ E2E selectors must be visibility-aware (role-based), because `<Activity>` keeps 
 
 | Item                                              | Reason                                                                                                                                                                                                                                                 | Until then                                                                             |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| Atomic `CartRepository.update(cartId, fn)` (A11)  | Taken out of this iteration's scope. It is a port change and lands in its own commit in the next iteration.                                                                                                                                            | `get` and `save`. Two quick adds can lose one; the README lists this as a known limit. |
 | Optimistic UI bonus                               | About 2 hours, more than the budget leaves after the three chosen bonuses. Highest risk of the six. Its rollback "in case of a stock error" only exists if "Add to cart" can fail on stock, so it has to be decided together with a stock call on add. | "Add to cart" shows a pending state and confirms after the server answers (U7).        |
 | Stock call on "Add to cart" (A7, options b and c) | Only the Optimistic UI bonus calls for it. Without that bonus it would put a 10 % failure on a step where nothing is at stake yet.                                                                                                                     | Availability is shown as a hint (U5) and stock is decided at checkout (A9).            |
 | Limit of 10 product types bonus                   | About 1.5 hours. Not among the brief's criteria. One full Touring bundle already holds 11 product types, so the rule raises product questions that have to be answered first.                                                                          | No limit on product types in the cart.                                                 |
@@ -584,7 +583,6 @@ Collected from the decisions above:
 
 - One long-lived Node.js process is required; cart, stock and idempotency records are in memory and reset on restart (A1, A8).
 - The bike selection is not shareable by URL and is lost on reload (A5).
-- Two quick adds can lose one until the atomic cart update lands (A11).
 - A cart changed in another tab while a checkout is in flight is not guarded against (A11).
 - An order cannot be looked up after checkout; the confirmation is gone after a reload (A14, U9).
 - An "individual item" in the cart is one bundle; a single accessory cannot be removed from a bundle in the cart (Terms).

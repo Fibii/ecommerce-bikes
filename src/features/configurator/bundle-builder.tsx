@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { availabilityResponse } from "@/contracts/api";
 import { isCompatible, type Accessory } from "@/domain/accessory";
 import type { Bike } from "@/domain/bike";
@@ -53,11 +53,15 @@ export function BundleBuilder({ bikes, accessories }: Props) {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [adding, setAdding] = useState(false);
   const [refreshing, startTransition] = useTransition();
+  const headingRef = useRef<HTMLHeadingElement>(null);
 
   // One request for every product (A10). Retry bumps `attempt`; the effect's
   // cleanup aborts the older request.
   useEffect(() => {
     const controller = new AbortController();
+    // Aborting does not stop an answer that is already on its way, so the
+    // effect also marks itself stale: only the newest request may set state.
+    let stale = false;
     const ids = [...bikes, ...accessories].map((product) => product.id);
     fetch(`/api/availability?ids=${ids.join(",")}`, {
       signal: controller.signal,
@@ -69,13 +73,16 @@ export function BundleBuilder({ bikes, accessories }: Props) {
         if (!body.success) throw new Error("no availability");
         return new Map(body.data.items.map((i) => [i.productId, i.available]));
       })
-      .then((counts) => setAvailability({ status: "ready", counts }))
-      .catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "AbortError")
-          return;
-        setAvailability({ status: "unknown" });
+      .then((counts) => {
+        if (!stale) setAvailability({ status: "ready", counts });
+      })
+      .catch(() => {
+        if (!stale) setAvailability({ status: "unknown" });
       });
-    return () => controller.abort();
+    return () => {
+      stale = true;
+      controller.abort();
+    };
   }, [bikes, accessories, attempt]);
 
   function retryAvailability() {
@@ -174,6 +181,8 @@ export function BundleBuilder({ bikes, accessories }: Props) {
     setNotice({ kind: "added" });
     setBikeId(null);
     setQuantities({});
+    // The button is disabled again; keep keyboard users at the top of the form.
+    headingRef.current?.focus();
     startTransition(() => router.refresh());
   }
 
@@ -181,8 +190,19 @@ export function BundleBuilder({ bikes, accessories }: Props) {
 
   return (
     <div className="grid gap-6 pb-32 lg:grid-cols-[1fr_24rem] lg:pb-0">
+      {/* One polite announcement for the stock of all 26 products. */}
+      <p role="status" className="sr-only">
+        {availability.status === "loading" && "Loading stock"}
+        {availability.status === "ready" && "Stock loaded"}
+        {availability.status === "unknown" && "Stock is unknown right now"}
+      </p>
       <section aria-labelledby="bikes-heading" className="space-y-3">
-        <h2 id="bikes-heading" className="text-lg font-semibold">
+        <h2
+          id="bikes-heading"
+          ref={headingRef}
+          tabIndex={-1}
+          className="text-lg font-semibold outline-none"
+        >
           1. Choose a bike
         </h2>
         <div
@@ -267,7 +287,7 @@ export function BundleBuilder({ bikes, accessories }: Props) {
               <ul className="space-y-3">
                 {incompatible.map((accessory) => (
                   <li key={accessory.id}>
-                    <Card className="bg-surface-muted opacity-70">
+                    <Card className="bg-surface-muted">
                       <AccessoryHead accessory={accessory} />
                       <p className="text-sm text-ink-muted">
                         Fits {accessory.compatibleFrameTypes.join(", ")} frames

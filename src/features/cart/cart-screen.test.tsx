@@ -66,6 +66,27 @@ describe("checkout result", () => {
     expect(
       screen.getByRole("link", { name: "Configure another bike" }),
     ).toBeTruthy();
+
+    // Place order is gone; focus moves to the result instead of the page top.
+    expect(document.activeElement?.textContent).toContain("Order confirmed");
+  });
+
+  it("shows the current cart, not the old order, once a new bundle is added", async () => {
+    fetchMock.mockReturnValue(
+      reply({ status: "confirmed", orderId: "ORD-1", totals: price }),
+    );
+    const { rerender } = render(<CartScreen cart={cart} />);
+    fireEvent.click(placeOrderButton());
+    await screen.findByText(/Order confirmed/);
+
+    // The customer leaves, adds another bike, and returns to the same mounted
+    // screen with the new server cart.
+    rerender(<CartScreen cart={{ ...cart, lines: [] }} />);
+    expect(screen.queryByText(/Order confirmed/)).not.toBeNull();
+    rerender(<CartScreen cart={cart} />);
+
+    expect(screen.queryByText(/Order confirmed/)).toBeNull();
+    expect(placeOrderButton()).toBeTruthy();
   });
 
   it("lists the shortfall with requested and available", async () => {

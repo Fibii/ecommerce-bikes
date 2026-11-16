@@ -15,6 +15,7 @@ type ApiError =
   | { readonly code: "line-not-found"; readonly lineId: string }
   | StockUnavailable
   | { readonly code: "cart-empty" }
+  | { readonly code: "unauthorized" }
   | { readonly code: "invalid-request"; readonly issues?: unknown };
 
 const STATUS: Record<ErrorCode, number> = {
@@ -27,6 +28,7 @@ const STATUS: Record<ErrorCode, number> = {
   "line-not-found": 404,
   "cart-empty": 409,
   "stock-unavailable": 503,
+  unauthorized: 401,
 };
 
 /** The one place where a use case error becomes an HTTP response. */

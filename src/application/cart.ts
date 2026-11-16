@@ -128,11 +128,10 @@ export async function addToCart(
   const lineId = cartLineId(deps.newId());
   if (!lineId.ok) throw new Error("The id generator made an invalid line id");
 
-  const cart = await loadCart(deps, input.cartId);
-  const added = addBundle(cart, lineId.value, bundle.value);
+  const added = await deps.carts.update(input.cartId, (cart) =>
+    addBundle(cart, lineId.value, bundle.value),
+  );
   if (!added.ok) throw new Error("The id generator repeated a line id");
-
-  await deps.carts.save(added.value);
   return ok(toCartView(added.value));
 }
 
@@ -140,21 +139,19 @@ export async function removeFromCart(
   deps: Pick<CartDeps, "carts">,
   input: { readonly cartId: CartId; readonly lineId: CartLineId },
 ): Promise<Result<CartView, LineNotFound>> {
-  const cart = await loadCart(deps, input.cartId);
-  const removed = removeLine(cart, input.lineId);
-  if (!removed.ok) return removed;
-
-  await deps.carts.save(removed.value);
-  return ok(toCartView(removed.value));
+  const removed = await deps.carts.update(input.cartId, (cart) =>
+    removeLine(cart, input.lineId),
+  );
+  return removed.ok ? ok(toCartView(removed.value)) : removed;
 }
 
 export async function clearCart(
   deps: Pick<CartDeps, "carts">,
   id: CartId,
 ): Promise<CartView> {
-  const cart = clear(await loadCart(deps, id));
-  await deps.carts.save(cart);
-  return toCartView(cart);
+  const cleared = await deps.carts.update(id, (cart) => ok(clear(cart)));
+  if (!cleared.ok) throw new Error("Clearing a cart cannot fail");
+  return toCartView(cleared.value);
 }
 
 function outOfRange(accessory: Accessory, value: number): QuantityOutOfRange {

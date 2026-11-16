@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import type { CartView } from "@/application/cart";
 import { Alert } from "@/ui/alert";
 import { Button } from "@/ui/button";
@@ -25,6 +25,26 @@ export function CartScreen({ cart }: { cart: CartView | null }) {
   // One key per attempt: a retry of the same attempt reuses it.
   const keyRef = useRef<string | null>(null);
   const inFlight = useRef(false);
+
+  // The cart page stays mounted while the customer is elsewhere (hidden pages
+  // keep their state), so a finished order's result would outlive the visit.
+  // When fresh server data arrives with lines in it, that result is history.
+  const [seenCart, setSeenCart] = useState(cart);
+  if (cart !== seenCart) {
+    setSeenCart(cart);
+    const finishedOrder =
+      outcome?.kind === "confirmed" || outcome?.kind === "cart-empty";
+    if (finishedOrder && (cart?.lines.length ?? 0) > 0) setOutcome(null);
+  }
+
+  // "Place order" disappears when the order is confirmed or the cart turns
+  // out empty; move focus to the result so it is read and the page is not lost.
+  const resultRef = useRef<HTMLDivElement>(null);
+  const finished =
+    outcome?.kind === "confirmed" || outcome?.kind === "cart-empty";
+  useEffect(() => {
+    if (finished) resultRef.current?.focus();
+  }, [finished]);
 
   const lines = cart?.lines ?? [];
 
@@ -70,7 +90,7 @@ export function CartScreen({ cart }: { cart: CartView | null }) {
 
   if (outcome?.kind === "confirmed") {
     return (
-      <Card className="space-y-4">
+      <Card ref={resultRef} tabIndex={-1} className="space-y-4 outline-none">
         <Alert tone="success">
           Order confirmed. Order number {outcome.orderId}. Total{" "}
           {formatMoney(outcome.gross)}.
@@ -84,7 +104,7 @@ export function CartScreen({ cart }: { cart: CartView | null }) {
 
   if (lines.length === 0 || outcome?.kind === "cart-empty") {
     return (
-      <Card className="space-y-4">
+      <Card ref={resultRef} tabIndex={-1} className="space-y-4 outline-none">
         {outcome?.kind === "cart-empty" ? (
           <Alert tone="warning">
             Your cart is empty, so no order was placed.

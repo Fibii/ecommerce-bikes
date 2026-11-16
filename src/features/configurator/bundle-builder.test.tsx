@@ -144,3 +144,36 @@ it("posts the bundle without prices, then confirms and resets", async () => {
   await waitFor(() => expect(refresh).toHaveBeenCalled());
   expect(screen.getByRole("radio", { name: /Road Racer/ })).not.toBeChecked();
 });
+
+it("ignores a stale availability answer that arrives after a newer one", async () => {
+  const answers: ((counts: Record<string, number>) => void)[] = [];
+  global.fetch = jest.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        answers.push((counts) =>
+          resolve(
+            reply({
+              items: Object.entries(counts).map(([productId, available]) => ({
+                productId,
+                available,
+              })),
+            }),
+          ),
+        );
+      }),
+  ) as unknown as typeof fetch;
+  const { rerender } = render(
+    <BundleBuilder bikes={bikes} accessories={accessories} />,
+  );
+  // A new accessories array re-runs the fetch effect, like a retry does.
+  rerender(<BundleBuilder bikes={bikes} accessories={[...accessories]} />);
+  expect(answers).toHaveLength(2);
+
+  answers[1]?.({ b1: 9, b2: 9, a1: 9, a2: 9 });
+  await screen.findAllByText("In stock");
+  answers[0]?.({ b1: 1, b2: 1, a1: 1, a2: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  expect(screen.queryAllByText("Only 1 left")).toHaveLength(0);
+  expect(screen.getAllByText("In stock").length).toBeGreaterThan(0);
+});

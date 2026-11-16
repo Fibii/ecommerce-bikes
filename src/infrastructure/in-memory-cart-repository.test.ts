@@ -1,4 +1,5 @@
-import { addBundle, cartId, cartLineId, emptyCart } from "@/domain/cart";
+import { addBundle, cartId, cartLineId } from "@/domain/cart";
+import { err } from "@/domain/result";
 import { createBundle } from "@/domain/bundle";
 import { must, touringVoyager } from "@/domain/test-support";
 import { InMemoryCartRepository } from "./in-memory-cart-repository";
@@ -10,37 +11,46 @@ describe("InMemoryCartRepository", () => {
     expect(await new InMemoryCartRepository().get(ID)).toBeUndefined();
   });
 
-  it("returns the cart that was saved", async () => {
+  it("stores the cart an update returns", async () => {
     const repository = new InMemoryCartRepository();
     const bundle = must(createBundle(touringVoyager, []));
-    const cart = must(
-      addBundle(emptyCart(ID), must(cartLineId("l-1")), bundle),
+
+    const updated = await repository.update(ID, (cart) =>
+      addBundle(cart, must(cartLineId("l-1")), bundle),
     );
 
-    await repository.save(cart);
-
-    expect(await repository.get(ID)).toEqual(cart);
+    expect(updated.ok).toBe(true);
+    expect((await repository.get(ID))?.lines).toHaveLength(1);
   });
 
   it("keeps carts of different ids apart", async () => {
     const repository = new InMemoryCartRepository();
-    const other = must(cartId("cart-2"));
+    await repository.update(ID, (cart) => ({ ok: true, value: cart }));
 
-    await repository.save(emptyCart(ID));
-
-    expect(await repository.get(other)).toBeUndefined();
+    expect(await repository.get(must(cartId("cart-2")))).toBeUndefined();
   });
 
-  it("replaces the cart on a second save", async () => {
+  it("stores nothing when the change fails", async () => {
+    const repository = new InMemoryCartRepository();
+
+    const updated = await repository.update(ID, () => err("nope" as const));
+
+    expect(updated).toEqual(err("nope"));
+    expect(await repository.get(ID)).toBeUndefined();
+  });
+
+  it("loses no update when several run at once", async () => {
     const repository = new InMemoryCartRepository();
     const bundle = must(createBundle(touringVoyager, []));
-    const full = must(
-      addBundle(emptyCart(ID), must(cartLineId("l-1")), bundle),
+
+    await Promise.all(
+      ["l-1", "l-2", "l-3"].map((line) =>
+        repository.update(ID, (cart) =>
+          addBundle(cart, must(cartLineId(line)), bundle),
+        ),
+      ),
     );
 
-    await repository.save(full);
-    await repository.save(emptyCart(ID));
-
-    expect((await repository.get(ID))?.lines).toEqual([]);
+    expect((await repository.get(ID))?.lines).toHaveLength(3);
   });
 });

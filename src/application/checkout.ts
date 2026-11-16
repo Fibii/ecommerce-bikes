@@ -1,7 +1,13 @@
-import { cartTotals, clear, type Cart, type CartId } from "@/domain/cart";
+import {
+  cartTotals,
+  removeLine,
+  type Cart,
+  type CartId,
+  type CartLineId,
+} from "@/domain/cart";
 import type { Price } from "@/domain/money";
 import { quantity, type Quantity } from "@/domain/quantity";
-import { err } from "@/domain/result";
+import { err, ok } from "@/domain/result";
 import { loadCart } from "./cart";
 import type {
   CartRepository,
@@ -46,8 +52,9 @@ export type CheckoutResult =
  *
  * The reservation is the decision, and a write: a failed one is not retried,
  * because the stock service may or may not have applied it. A reservation
- * that does not answer in time counts as `stock-unavailable`. Any failure
- * leaves the cart as it was.
+ * that does not answer in time counts as `stock-unavailable`; if the customer
+ * tries again, a new reservation is made. Any failure leaves the cart as it
+ * was.
  *
  * Only a confirmed order is remembered under the idempotency key, so a
  * double submit does not reserve twice and "try again" can still succeed.
@@ -70,23 +77,58 @@ async function placeOrder(
   const cart = await loadCart(deps, id);
   if (cart.lines.length === 0) return { status: "cart-empty" };
 
-  const reservation = await withTimeout(
-    deps.stock.reserve(itemsToReserve(cart)),
-    RESERVE_TIMEOUT_MS,
-    err({ code: "stock-unavailable" as const }),
-  );
+  const reservation = await reserveOnce(deps, cart);
   if (!reservation.ok) {
     return reservation.error.code === "shortfall"
       ? { status: "shortfall", items: reservation.error.items }
       : { status: "stock-unavailable" };
   }
 
-  await deps.carts.save(clear(cart));
+  // Only the lines that were paid for go. A line added while the reservation
+  // was running stays in the cart.
+  await deps.carts.update(id, (current) =>
+    ok(
+      removeLines(
+        current,
+        cart.lines.map((line) => line.id),
+      ),
+    ),
+  );
   return {
     status: "confirmed",
     orderId: deps.newOrderId(),
     totals: cartTotals(cart),
   };
+}
+
+/**
+ * Reserves the cart's items once per cart and lines while a call is running or
+ * has succeeded: a duplicate sent meanwhile joins the running call, and a
+ * success is returned again instead of reserving a second time. The timeout is
+ * part of the call, so a failed or timed-out reservation is forgotten and a
+ * retry makes a fresh one. Line ids are never reused, so a later purchase of
+ * the same products is a different key.
+ */
+function reserveOnce(deps: CheckoutDeps, cart: Cart) {
+  const lines = cart.lines.map((line) => line.id).join(",");
+  return deps.idempotency.run(
+    `reserve:${cart.id}:${lines}`,
+    () =>
+      withTimeout(
+        deps.stock.reserve(itemsToReserve(cart)),
+        RESERVE_TIMEOUT_MS,
+        err({ code: "stock-unavailable" as const }),
+      ),
+    (reservation) => reservation.ok,
+  );
+}
+
+function removeLines(cart: Cart, ids: readonly CartLineId[]): Cart {
+  return ids.reduce((rest, id) => {
+    const removed = removeLine(rest, id);
+    // A line the customer already removed is gone; nothing to do for it.
+    return removed.ok ? removed.value : rest;
+  }, cart);
 }
 
 /** One position per product: the same accessory in two bundles is summed. */
