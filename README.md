@@ -94,4 +94,31 @@ The brief asks for a record of what was deliberately left out. Reasons are in [0
 
 ## Deployment
 
-Run `npm run build` and then `npm start` on any host that keeps one Node.js process alive (a VM, a container, a long-running PaaS service). Because carts, stock and idempotency records are held in process memory, do not run several instances behind a load balancer and do not use a serverless platform such as Vercel: each invocation would see its own cart and stock. Moving to several instances needs a shared store, which is one new adapter for `CartRepository`, `StockService` and `IdempotencyStore`. Set the `STOCK_*` variables above to tune the simulated stock service, and `REVALIDATE_SECRET` to enable cache revalidation.
+The app runs as **one Docker container**. Carts, stock reservations and
+idempotency keys live in process memory, so never run several instances and do
+not use serverless platforms (including Vercel).
+
+```bash
+npm run deploy -- --dry-run      # print the steps, run nothing
+PORT=3000 REVALIDATE_SECRET=change-me npm run deploy
+```
+
+`scripts/deploy.sh` builds the image tagged with the git short sha
+(`--tag` overrides it), replaces the `bikes` container (`--restart
+unless-stopped`) and waits for its `HEALTHCHECK` (`GET /api/health`).
+
+**Environment variables:** `PORT` (default 3000), `REVALIDATE_SECRET` (without
+it `POST /api/revalidate` refuses every request), `STOCK_FAILURE_RATE`,
+`STOCK_LATENCY_MIN_MS`, `STOCK_LATENCY_MAX_MS`, `STOCK_SEED`, plus `APP_NAME`
+and `HEALTH_TIMEOUT` (seconds, default 60) for the script itself.
+
+**Cache:** the catalog is cached in the server and refreshed in the background
+after `POST /api/revalidate` with the `x-revalidate-secret` header. The cache is
+per process, which is another reason for a single instance.
+
+**Rollback:** before swapping, the script records the image of the running
+container. If the new one is not healthy within `HEALTH_TIMEOUT`, it is removed
+and the previous image is started again. Old images stay on the host for manual use. Every swap restarts the process, so
+open carts are lost.
+
+Test the script's argument handling with `npm run test:deploy`.

@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+.github
+.lavish
+e2e
+test-results
+playwright-report
+coverage
+*.tsbuildinfo
+.env*
+Dockerfile

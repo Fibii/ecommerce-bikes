@@ -11,7 +11,9 @@
     "test": "jest",
     "test:e2e": "npm run build && playwright test",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test:deploy": "node --test scripts/deploy.test.mjs",
+    "deploy": "bash scripts/deploy.sh"
   },
   "dependencies": {
     "next": "16.4.6",
