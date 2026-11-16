@@ -47,7 +47,7 @@ Ids, money, tax rates and quantities are plain numbers and strings at runtime, b
 
 ## Money and tax
 
-All money is **integer cents**. The domain never sees a decimal price: converting the catalog's `899.0` to `89900` happens in the catalog adapter (a later PR), which also rejects prices with more than two decimals. `cents()` rejects anything that is not a whole number, so a float such as `79.9 * 100` (`7990.000000000001`) cannot get in.
+All money is **integer cents**. The domain never sees a decimal price: converting the catalog's `899.0` to `89900` happens in the catalog adapter (`src/infrastructure/json-catalog-reader.ts`), which also rejects prices with more than two decimals. `cents()` rejects anything that is not a whole number, so a float such as `79.9 * 100` (`7990.000000000001`) cannot get in.
 
 Tax rates are **basis points**: 19 % is `1900`. That keeps the tax arithmetic in integers too.
 
