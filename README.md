@@ -31,7 +31,7 @@ To see the stock failure path by hand, make the stock service always fail:
 STOCK_FAILURE_RATE=1 npm start
 ```
 
-The stock service reads `STOCK_FAILURE_RATE` (default `0.1`), `STOCK_LATENCY_MIN_MS` (200), `STOCK_LATENCY_MAX_MS` (1200) and `STOCK_SEED`.
+The stock service reads `STOCK_FAILURE_RATE` (default `0.1`), `STOCK_LATENCY_MIN_MS` (200), `STOCK_LATENCY_MAX_MS` (1200) and `STOCK_SEED`. `REVALIDATE_SECRET` guards `POST /api/revalidate`; leave it unset and that endpoint rejects every request.
 
 ### End-to-end tests
 
@@ -66,30 +66,32 @@ Dependencies point inwards and ESLint enforces it. Reads go Server Component →
 
 ## Bonuses
 
-Race conditions, A11y and Caching strategy were chosen (A13). They are being added in a parallel pull request, so this README does not describe them yet.
+Race conditions, A11y and Caching strategy are built (A13).
+
+- **Race conditions:** `CartRepository` has `get` and an atomic `update(cartId, fn)`, so two quick adds both land (A11). Checkout is idempotent through a reservation key (A9). The quantity slider is covered by the same design ([0001](docs/decisions/0001-architecture.md)).
+- **A11y:** native radio and range inputs, operable by keyboard, with `aria-live` announcements (U11, [0002](docs/decisions/0002-ui.md)).
+- **Caching strategy:** the catalog is cached with `'use cache'`, an hourly life and a `catalog` tag. `POST /api/revalidate` refreshes it and needs the header `x-revalidate-secret`, which must equal the `REVALIDATE_SECRET` environment variable. Without that variable no request is accepted (A3, A4).
 
 ## Left out, and why
 
 The brief asks for a record of what was deliberately left out. Reasons are in [0001, "Deferred to a later iteration"](docs/decisions/0001-architecture.md#deferred-to-a-later-iteration).
 
-| Left out                             | Why                                                                                               |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| Optimistic UI bonus                  | About 2 hours and the riskiest bonus; it would also need a stock call on "Add to cart" (A7).      |
-| Limit of 10 product types bonus      | Not among the brief's criteria; one full Touring bundle already has 11 types, a product question. |
-| i18n bonus                           | About 3 hours: German names for 26 products and changes on every screen.                          |
-| Atomic `CartRepository.update` (A11) | A port change, planned as its own commit in the next iteration.                                   |
-| A database                           | A new adapter behind the existing ports; nothing else would change.                               |
+| Left out                        | Why                                                                                               |
+| ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| Optimistic UI bonus             | About 2 hours and the riskiest bonus; it would also need a stock call on "Add to cart" (A7).      |
+| Limit of 10 product types bonus | Not among the brief's criteria; one full Touring bundle already has 11 types, a product question. |
+| i18n bonus                      | About 3 hours: German names for 26 products and changes on every screen.                          |
+| A database                      | A new adapter behind the existing ports; nothing else would change.                               |
 
 ## Known limits
 
 - One long-lived Node.js process is required. Cart, stock and idempotency records are in memory and reset on restart (A1, A8).
 - The bike selection is not shareable by URL and is lost on reload (A5).
-- Two quick adds can lose one until the atomic cart update lands (A11).
 - A cart changed in another tab while a checkout is in flight is not guarded against (A11).
 - An order cannot be looked up after checkout; the confirmation is gone after a reload (A14, U9).
 - An "individual item" in the cart is one bundle; a single accessory cannot be removed from a bundle in the cart.
-- The bonuses that were not built (see above).
+- The bonuses that were not built, and why (A13; see "Left out").
 
 ## Deployment
 
-Run `npm run build` and then `npm start` on any host that keeps one Node.js process alive (a VM, a container, a long-running PaaS service). Because carts, stock and idempotency records are held in process memory, do not run several instances behind a load balancer and do not use a serverless platform such as Vercel: each invocation would see its own cart and stock. Moving to several instances needs a shared store, which is one new adapter for `CartRepository`, `StockService` and `IdempotencyStore`. Set the `STOCK_*` variables above to tune the simulated stock service.
+Run `npm run build` and then `npm start` on any host that keeps one Node.js process alive (a VM, a container, a long-running PaaS service). Because carts, stock and idempotency records are held in process memory, do not run several instances behind a load balancer and do not use a serverless platform such as Vercel: each invocation would see its own cart and stock. Moving to several instances needs a shared store, which is one new adapter for `CartRepository`, `StockService` and `IdempotencyStore`. Set the `STOCK_*` variables above to tune the simulated stock service, and `REVALIDATE_SECRET` to enable cache revalidation.
