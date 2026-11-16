@@ -9,7 +9,7 @@
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "jest",
-    "test:e2e": "playwright test",
+    "test:e2e": "npm run build && playwright test",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
