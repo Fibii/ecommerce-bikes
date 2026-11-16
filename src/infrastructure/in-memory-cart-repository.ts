@@ -1,5 +1,6 @@
 import type { CartRepository } from "@/application/ports";
-import type { Cart, CartId } from "@/domain/cart";
+import { emptyCart, type Cart, type CartId } from "@/domain/cart";
+import type { Result } from "@/domain/result";
 
 /** Keeps carts in memory, for one long-lived Node process. */
 export class InMemoryCartRepository implements CartRepository {
@@ -9,7 +10,13 @@ export class InMemoryCartRepository implements CartRepository {
     return this.carts.get(id);
   }
 
-  async save(cart: Cart): Promise<void> {
-    this.carts.set(cart.id, cart);
+  // Atomic because nothing awaits between the read and the write.
+  async update<E>(
+    id: CartId,
+    change: (cart: Cart) => Result<Cart, E>,
+  ): Promise<Result<Cart, E>> {
+    const changed = change(this.carts.get(id) ?? emptyCart(id));
+    if (changed.ok) this.carts.set(id, changed.value);
+    return changed;
   }
 }

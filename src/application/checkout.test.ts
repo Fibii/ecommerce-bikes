@@ -132,6 +132,26 @@ describe("checkout", () => {
     expect((await getCart(cartDeps, CART)).lines).toHaveLength(2);
   });
 
+  it("keeps a line added while the reservation was running", async () => {
+    jest.useFakeTimers();
+    const { stock, deps, cartDeps, fillCart } = setup();
+    await fillCart();
+    stock.slowReserve(500);
+
+    const pending = checkout(deps, order());
+    await jest.advanceTimersByTimeAsync(100);
+    await addToCart(cartDeps, {
+      cartId: CART,
+      bikeId: "bike-005",
+      accessories: [],
+    });
+    await jest.advanceTimersByTimeAsync(500);
+
+    expect((await pending).status).toBe("confirmed");
+    const rest = (await getCart(cartDeps, CART)).lines;
+    expect(rest.map((line) => line.bike.id)).toEqual(["bike-005"]);
+  });
+
   it("lets the customer try again after a failure", async () => {
     const { stock, deps, fillCart } = setup();
     await fillCart();

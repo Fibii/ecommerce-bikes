@@ -1,7 +1,13 @@
-import { cartTotals, clear, type Cart, type CartId } from "@/domain/cart";
+import {
+  cartTotals,
+  removeLine,
+  type Cart,
+  type CartId,
+  type CartLineId,
+} from "@/domain/cart";
 import type { Price } from "@/domain/money";
 import { quantity, type Quantity } from "@/domain/quantity";
-import { err } from "@/domain/result";
+import { err, ok } from "@/domain/result";
 import { loadCart } from "./cart";
 import type {
   CartRepository,
@@ -46,8 +52,9 @@ export type CheckoutResult =
  *
  * The reservation is the decision, and a write: a failed one is not retried,
  * because the stock service may or may not have applied it. A reservation
- * that does not answer in time counts as `stock-unavailable`. Any failure
- * leaves the cart as it was.
+ * that does not answer in time counts as `stock-unavailable`; if the customer
+ * tries again, the late answer of the first call is used, not a second
+ * reservation. Any failure leaves the cart as it was.
  *
  * Only a confirmed order is remembered under the idempotency key, so a
  * double submit does not reserve twice and "try again" can still succeed.
@@ -81,12 +88,24 @@ async function placeOrder(
       : { status: "stock-unavailable" };
   }
 
-  await deps.carts.save(clear(cart));
+  // Only the lines that were paid for go. A line added while the reservation
+  // was running stays in the cart.
+  await deps.carts.update(id, (current) =>
+    ok(removeLines(current, cart.lines.map((line) => line.id))),
+  );
   return {
     status: "confirmed",
     orderId: deps.newOrderId(),
     totals: cartTotals(cart),
   };
+}
+
+function removeLines(cart: Cart, ids: readonly CartLineId[]): Cart {
+  return ids.reduce((rest, id) => {
+    const removed = removeLine(rest, id);
+    // A line the customer already removed is gone; nothing to do for it.
+    return removed.ok ? removed.value : rest;
+  }, cart);
 }
 
 /** One position per product: the same accessory in two bundles is summed. */

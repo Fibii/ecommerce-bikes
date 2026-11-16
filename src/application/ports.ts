@@ -25,10 +25,18 @@ export interface CatalogReader {
 /**
  * Where carts are kept. A cart that was never saved reads as `undefined`;
  * the use cases treat that as an empty cart.
+ *
+ * `update` is the only write. It applies `change`, a pure function of the
+ * current cart (an empty one if none was saved), and stores the new cart only
+ * if `change` succeeds. Updates of the same cart never interleave, so none is
+ * lost: a database adapter would run it in one transaction.
  */
 export interface CartRepository {
   get(id: CartId): Promise<Cart | undefined>;
-  save(cart: Cart): Promise<void>;
+  update<E>(
+    id: CartId,
+    change: (cart: Cart) => Result<Cart, E>,
+  ): Promise<Result<Cart, E>>;
 }
 
 /** The stock service did not answer in time or answered with an error. */
