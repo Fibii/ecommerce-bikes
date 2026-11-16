@@ -17,9 +17,14 @@
 #   APP_NAME=bikes       container and image name
 #   HEALTH_TIMEOUT=60    seconds to wait for the container to become healthy
 #
-# Rollback: the previously running tag is recorded before the swap. If the new
-# container is not healthy within HEALTH_TIMEOUT, it is removed and the
-# previous tag is started again. Memory state (carts) is lost on any swap.
+# HTTPS required: the cart cookie is Secure in production, so browsers drop it
+# over plain http (except on localhost). Serve the app behind a reverse proxy or
+# a platform that terminates TLS. Testing over http://localhost works.
+#
+# Rollback: the previously running image ID is recorded before the swap. If the
+# new container is not healthy within HEALTH_TIMEOUT, it is removed and the
+# previous image is started again and health-checked. Memory state (carts) is
+# lost on any swap.
 set -euo pipefail
 
 NAME="${APP_NAME:-bikes}"
@@ -79,9 +84,9 @@ wait_healthy() {
 
 previous=""
 if [ "$DRY_RUN" = 1 ]; then
-  echo "+ previous=\$(docker inspect -f '{{.Config.Image}}' $NAME)  # remembered for rollback"
+  echo "+ previous=\$(docker inspect -f '{{.Image}}' $NAME)  # remembered for rollback"
 else
-  previous="$(docker inspect -f '{{.Config.Image}}' "$NAME" 2>/dev/null || true)"
+  previous="$(docker inspect -f '{{.Image}}' "$NAME" 2>/dev/null || true)"
 fi
 
 run docker build -t "$IMAGE" .
@@ -98,7 +103,11 @@ docker logs --tail 30 "$NAME" >&2 || true
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 if [ -n "$previous" ]; then
   start "$previous"
-  echo "deploy: rolled back to $previous" >&2
+  if wait_healthy; then
+    echo "deploy: rolled back to previous image $previous" >&2
+  else
+    echo "deploy: rollback to $previous is NOT healthy" >&2
+  fi
 else
   echo "deploy: no previous container to roll back to" >&2
 fi

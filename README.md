@@ -98,6 +98,11 @@ The app runs as **one Docker container**. Carts, stock reservations and
 idempotency keys live in process memory, so never run several instances and do
 not use serverless platforms (including Vercel).
 
+**HTTPS is required.** The cart cookie is `Secure` in production, so browsers
+drop it over plain http (except on localhost) and carts would never persist.
+Serve the app behind a reverse proxy or a platform that terminates TLS. Testing
+over `http://localhost` works.
+
 ```bash
 npm run deploy -- --dry-run      # print the steps, run nothing
 PORT=3000 REVALIDATE_SECRET=change-me npm run deploy
@@ -116,9 +121,9 @@ and `HEALTH_TIMEOUT` (seconds, default 60) for the script itself.
 after `POST /api/revalidate` with the `x-revalidate-secret` header. The cache is
 per process, which is another reason for a single instance.
 
-**Rollback:** before swapping, the script records the image of the running
+**Rollback:** before swapping, the script records the image ID of the running
 container. If the new one is not healthy within `HEALTH_TIMEOUT`, it is removed
-and the previous image is started again. Old images stay on the host for manual use. Every swap restarts the process, so
+and the previous image is started again and health-checked. Old images stay on the host for manual use. Every swap restarts the process, so
 open carts are lost.
 
 Test the script's argument handling with `npm run test:deploy`.
