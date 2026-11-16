@@ -1,6 +1,6 @@
 # Domain model
 
-This document explains the domain logic in `src/domain/`: what each concept means, the rules it enforces, and how prices and tax are calculated. It describes the code as it is; the reasons behind the larger choices are in the decision records.
+This document explains the domain logic in `src/domain/`: what each concept means, the rules it enforces, and how prices and tax are calculated. It describes the code as it is.
 
 The domain is pure TypeScript. It does no I/O, imports nothing outside `src/domain/` (ESLint enforces this), and has no classes: every concept is readonly data plus functions that return new data. Because it is plain data, a domain value can be passed from a Server Component to a Client Component unchanged, and the configurator can price a bundle in the browser with exactly the same functions the server uses.
 
@@ -103,7 +103,7 @@ The first entry that breaks a rule decides the error. A bike with no accessories
 
 ## Cart
 
-The cart is the aggregate: it has an id and a list of lines, and it changes only through three functions in `cart.ts`. Each returns a **new** cart and leaves the one it was given unchanged.
+The cart is the aggregate: it has an id and a list of lines, and it changes only through `addBundle`, `removeLine` and `clear` in `cart.ts`. Each returns a **new** cart and leaves the one it was given unchanged.
 
 | Function | Does | Can fail with |
 |---|---|---|
