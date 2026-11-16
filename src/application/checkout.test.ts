@@ -152,6 +152,24 @@ describe("checkout", () => {
     expect(rest.map((line) => line.bike.id)).toEqual(["bike-005"]);
   });
 
+  it("does not reserve twice when the retry follows a timed-out call", async () => {
+    jest.useFakeTimers();
+    const { stock, deps, cartDeps, fillCart } = setup();
+    await fillCart();
+    stock.slowReserve(RESERVE_TIMEOUT_MS + 1000);
+
+    const first = checkout(deps, order("key-1"));
+    await jest.advanceTimersByTimeAsync(RESERVE_TIMEOUT_MS);
+    expect(await first).toEqual({ status: "stock-unavailable" });
+
+    const retry = checkout(deps, order("key-2"));
+    await jest.advanceTimersByTimeAsync(1000);
+
+    expect((await retry).status).toBe("confirmed");
+    expect(stock.reservations).toHaveLength(1);
+    expect((await getCart(cartDeps, CART)).lines).toEqual([]);
+  });
+
   it("lets the customer try again after a failure", async () => {
     const { stock, deps, fillCart } = setup();
     await fillCart();

@@ -78,7 +78,7 @@ async function placeOrder(
   if (cart.lines.length === 0) return { status: "cart-empty" };
 
   const reservation = await withTimeout(
-    deps.stock.reserve(itemsToReserve(cart)),
+    reserveOnce(deps, cart),
     RESERVE_TIMEOUT_MS,
     err({ code: "stock-unavailable" as const }),
   );
@@ -98,6 +98,23 @@ async function placeOrder(
     orderId: deps.newOrderId(),
     totals: cartTotals(cart),
   };
+}
+
+/**
+ * Reserves the cart's items at most once while that is in doubt. The call is
+ * kept under a key of the cart and its lines, so a retry sent after the first
+ * one timed out joins the call that is still running, or gets its stored
+ * success, instead of reserving a second time. A failed call is forgotten and
+ * can be tried again. Line ids are never reused, so a later purchase of the
+ * same products is a different key.
+ */
+function reserveOnce(deps: CheckoutDeps, cart: Cart) {
+  const lines = cart.lines.map((line) => line.id).join(",");
+  return deps.idempotency.run(
+    `reserve:${cart.id}:${lines}`,
+    () => deps.stock.reserve(itemsToReserve(cart)),
+    (reservation) => reservation.ok,
+  );
 }
 
 function removeLines(cart: Cart, ids: readonly CartLineId[]): Cart {
