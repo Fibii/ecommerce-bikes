@@ -17,7 +17,7 @@ const ENV = {
 
 const globals = globalThis as { __bikesApp?: unknown };
 
-function useStock(override: Partial<StockService> = {}) {
+function installStock(override: Partial<StockService> = {}) {
   const adapters = createAdapters(ENV);
   const real = adapters.stock;
   const stock: StockService = {
@@ -28,7 +28,7 @@ function useStock(override: Partial<StockService> = {}) {
   globals.__bikesApp = createApp({ ...adapters, stock });
 }
 
-beforeEach(() => useStock());
+beforeEach(() => installStock());
 afterAll(() => delete globals.__bikesApp);
 
 function call(
@@ -199,7 +199,7 @@ describe("GET /api/availability", () => {
   });
 
   it("503 stock-unavailable when the stock service fails", async () => {
-    useStock({
+    installStock({
       availability: async () => err({ code: "stock-unavailable" as const }),
     });
 
@@ -216,7 +216,7 @@ describe("POST /api/checkout", () => {
   const key = { "Idempotency-Key": "k1" };
 
   it("200 confirmed with order id and totals, and empties the cart", async () => {
-    useStock({ reserve: async () => ok(undefined) });
+    installStock({ reserve: async () => ok(undefined) });
     const { cookie } = await cartWithOneLine();
 
     const res = await checkout(
@@ -235,7 +235,7 @@ describe("POST /api/checkout", () => {
 
   it("409 shortfall lists the short items", async () => {
     const items = [{ productId: "bike-001", requested: 1, available: 0 }];
-    useStock({
+    installStock({
       reserve: async () => err({ code: "shortfall" as const, items } as never),
     });
     const { cookie } = await cartWithOneLine();
@@ -260,7 +260,7 @@ describe("POST /api/checkout", () => {
   });
 
   it("503 stock-unavailable with Retry-After", async () => {
-    useStock({
+    installStock({
       reserve: async () => err({ code: "stock-unavailable" as const }),
     });
     const { cookie } = await cartWithOneLine();
@@ -284,7 +284,7 @@ describe("POST /api/checkout", () => {
   });
 
   it("replays the stored order for a repeated key", async () => {
-    useStock({ reserve: async () => ok(undefined) });
+    installStock({ reserve: async () => ok(undefined) });
     const { cookie } = await cartWithOneLine();
     const send = () =>
       checkout(call("POST", "/api/checkout", { cookie, headers: key }));
@@ -293,5 +293,58 @@ describe("POST /api/checkout", () => {
     const second = await (await send()).json();
 
     expect(second).toEqual(first);
+  });
+});
+
+describe("concurrent POST /api/checkout", () => {
+  function countingStock(delayMs = 20) {
+    const reservations: unknown[] = [];
+    installStock({
+      reserve: async (items) => {
+        reservations.push(items);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        return ok(undefined);
+      },
+    });
+    return reservations;
+  }
+  const send = (cookie: string, k: string) =>
+    checkout(
+      call("POST", "/api/checkout", {
+        cookie,
+        headers: { "Idempotency-Key": k },
+      }),
+    );
+
+  it("one order and one reservation for requests that share a key", async () => {
+    const reservations = countingStock();
+    const { cookie } = await cartWithOneLine();
+
+    const responses = await Promise.all(
+      Array.from({ length: 5 }, () => send(cookie, "same")),
+    );
+
+    const bodies = await Promise.all(responses.map((res) => res.json()));
+    expect(responses.map((res) => res.status)).toEqual([
+      200, 200, 200, 200, 200,
+    ]);
+    expect(new Set(bodies.map((body) => body.orderId)).size).toBe(1);
+    expect(reservations).toHaveLength(1);
+  });
+
+  it("reserves the lines of one cart once when keys differ", async () => {
+    const reservations = countingStock();
+    const { cookie } = await cartWithOneLine();
+
+    const responses = await Promise.all(
+      ["a", "b", "c"].map((k) => send(cookie, k)),
+    );
+
+    // Keys differ, so each is its own checkout, but the same lines must not be
+    // reserved (paid) twice: every call is answered by the one reservation.
+    expect(responses.map((res) => res.status)).toEqual([200, 200, 200]);
+    expect(reservations).toHaveLength(1);
+    const cart = await clearCart(call("DELETE", "/api/cart", { cookie }));
+    expect((await cart.json()).lines).toEqual([]);
   });
 });

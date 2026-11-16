@@ -177,3 +177,40 @@ it("ignores a stale availability answer that arrives after a newer one", async (
   expect(screen.queryAllByText("Only 1 left")).toHaveLength(0);
   expect(screen.getAllByText("In stock").length).toBeGreaterThan(0);
 });
+
+it("aborts the older availability request and ignores its late answer or failure", async () => {
+  const pending: {
+    signal?: AbortSignal | null;
+    resolve: (r: Response) => void;
+    reject: (e: unknown) => void;
+  }[] = [];
+  global.fetch = jest.fn(
+    (_url: string, init?: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        pending.push({ signal: init?.signal, resolve, reject });
+      }),
+  ) as unknown as typeof fetch;
+  const { rerender } = render(
+    <BundleBuilder bikes={bikes} accessories={accessories} />,
+  );
+  rerender(<BundleBuilder bikes={bikes} accessories={[...accessories]} />);
+  expect(pending).toHaveLength(2);
+  expect(pending[0]?.signal?.aborted).toBe(true);
+  expect(pending[1]?.signal?.aborted).toBe(false);
+
+  // The aborted request fails, as fetch does; that must not read as "unknown".
+  pending[0]?.reject(new DOMException("aborted", "AbortError"));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(screen.queryByText(/Stock is unknown right now/)).toBeNull();
+
+  pending[1]?.resolve(
+    reply({
+      items: ["b1", "b2", "a1", "a2"].map((productId) => ({
+        productId,
+        available: 9,
+      })),
+    }),
+  );
+  await screen.findAllByText("In stock");
+  expect(screen.queryByText(/Stock is unknown right now/)).toBeNull();
+});
