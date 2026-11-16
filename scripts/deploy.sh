@@ -28,6 +28,8 @@
 # deploy fails, Cloud Run keeps serving that revision. If it succeeds but
 # GET /api/health on the service URL is not OK within HEALTH_TIMEOUT, traffic is
 # shifted back with `gcloud run services update-traffic --to-revisions=<previous>=100`.
+# That pins traffic to the named revision, so the next deploy first runs
+# `gcloud run services update-traffic --to-latest` to restore latest-revision routing.
 set -euo pipefail
 
 SERVICE="${SERVICE:-bikes}"
@@ -54,6 +56,7 @@ case "$HEALTH_TIMEOUT" in ''|*[!0-9]*) die "HEALTH_TIMEOUT must be a number" ;; 
 # contain commas.
 env_list=""
 for var in REVALIDATE_SECRET STOCK_FAILURE_RATE STOCK_LATENCY_MIN_MS STOCK_LATENCY_MAX_MS STOCK_SEED; do
+  case "${!var:-}" in *@*) die "$var must not contain '@' (used as the gcloud list separator)" ;; esac
   [ -z "${!var:-}" ] || env_list="${env_list:+$env_list@}$var=${!var}"
 done
 
@@ -69,6 +72,7 @@ if [ "$DRY_RUN" = 1 ]; then
     case "${masked[$i]}" in "^@^"*) masked[i]="^@^<${env_list//=*/}...>" ;; esac
   done
   echo "+ previous=\$(${gc[*]} run services describe $SERVICE --region $REGION --format='value(status.latestReadyRevisionName)')  # remembered for rollback"
+  echo "+ if a previous revision exists: ${gc[*]} run services update-traffic $SERVICE --region $REGION --to-latest"
   echo "+ ${gc[*]} ${masked[*]}"
   echo "+ url=\$(${gc[*]} run services describe $SERVICE --region $REGION --format='value(status.url)')"
   echo "+ curl -fsS \$url/api/health  # retry up to ${HEALTH_TIMEOUT}s"
@@ -79,6 +83,8 @@ fi
 
 previous="$("${gc[@]}" run services describe "$SERVICE" --region "$REGION" \
   --format='value(status.latestReadyRevisionName)' 2>/dev/null || true)"
+
+[ -z "$previous" ] || "${gc[@]}" run services update-traffic "$SERVICE" --region "$REGION" --to-latest
 
 # A failed deploy leaves the previous revision serving traffic.
 "${gc[@]}" "${deploy_args[@]}" || { echo "deploy: gcloud deploy failed; Cloud Run keeps serving ${previous:-nothing}" >&2; exit 1; }

@@ -133,6 +133,8 @@ per process, which is another reason for a single instance.
 fails, Cloud Run keeps serving that revision. If it succeeds but
 `GET <service url>/api/health` is not OK within `HEALTH_TIMEOUT`, the script
 runs `gcloud run services update-traffic --to-revisions=<previous>=100`.
-Shifting traffic lands users on a different process, so carts are lost.
+Shifting traffic lands users on a different process, so carts are lost. The
+rollback pins traffic to that revision, so every deploy first runs
+`gcloud run services update-traffic --to-latest` to restore latest-revision routing.
 
 Test the script's argument handling with `npm run test:deploy`.
