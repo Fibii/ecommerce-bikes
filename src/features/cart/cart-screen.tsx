@@ -26,6 +26,17 @@ export function CartScreen({ cart }: { cart: CartView | null }) {
   const keyRef = useRef<string | null>(null);
   const inFlight = useRef(false);
 
+  // The cart page stays mounted while the customer is elsewhere (hidden pages
+  // keep their state), so a finished order's result would outlive the visit.
+  // When fresh server data arrives with lines in it, that result is history.
+  const [seenCart, setSeenCart] = useState(cart);
+  if (cart !== seenCart) {
+    setSeenCart(cart);
+    const finishedOrder =
+      outcome?.kind === "confirmed" || outcome?.kind === "cart-empty";
+    if (finishedOrder && (cart?.lines.length ?? 0) > 0) setOutcome(null);
+  }
+
   // "Place order" disappears when the order is confirmed or the cart turns
   // out empty; move focus to the result so it is read and the page is not lost.
   const resultRef = useRef<HTMLDivElement>(null);
