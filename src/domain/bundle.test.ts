@@ -95,33 +95,28 @@ describe("createBundle", () => {
     ]);
   });
 
-  it("adds up the quantities when an accessory is listed twice", () => {
+  it("rejects an accessory listed twice", () => {
     const result = createBundle(touringVoyager, [
       select(helmet, 1),
       select(chainLock, 1),
       select(helmet, 2),
     ]);
 
-    expect(must(result).accessories).toEqual([
-      { accessory: helmet, quantity: 3 },
-      { accessory: chainLock, quantity: 1 },
-    ]);
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "duplicate-accessory", accessoryId: "acc-001" },
+    });
   });
 
-  it("rejects an accessory listed twice whose quantities exceed maxAmount", () => {
+  it("rejects an accessory listed twice even when one quantity is 0", () => {
     const result = createBundle(touringVoyager, [
-      select(helmet, 3),
-      select(helmet, 2),
+      select(helmet, 0),
+      select(helmet, 1),
     ]);
 
     expect(result).toEqual({
       ok: false,
-      error: {
-        code: "quantity-out-of-range",
-        accessoryId: "acc-001",
-        quantity: 5,
-        maxAmount: 4,
-      },
+      error: { code: "duplicate-accessory", accessoryId: "acc-001" },
     });
   });
 });

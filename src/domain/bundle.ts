@@ -37,31 +37,35 @@ export type QuantityOutOfRange = {
   readonly maxAmount: Quantity;
 };
 
-export type BundleError = IncompatibleAccessory | QuantityOutOfRange;
+export type DuplicateAccessory = {
+  readonly code: "duplicate-accessory";
+  readonly accessoryId: AccessoryId;
+};
+
+export type BundleError =
+  | IncompatibleAccessory
+  | QuantityOutOfRange
+  | DuplicateAccessory;
 
 /**
  * Builds a bundle from a bike and accessory quantities (0..maxAmount).
  *
  * A quantity of 0 means the accessory is not in the bundle. An accessory
- * listed more than once counts once, with its quantities added up.
+ * listed more than once is rejected.
  * The first accessory that breaks a rule is returned as the error.
  */
 export function createBundle(
   bike: Bike,
   selection: readonly AccessoryQuantity[],
 ): Result<Bundle, BundleError> {
-  const chosen = new Map<
-    AccessoryId,
-    { accessory: Accessory; total: number }
-  >();
-  for (const { accessory, quantity } of selection) {
-    if (quantity === 0) continue;
-    const total = (chosen.get(accessory.id)?.total ?? 0) + quantity;
-    chosen.set(accessory.id, { accessory, total });
-  }
-
+  const seen = new Set<AccessoryId>();
   const accessories: AccessoryQuantity[] = [];
-  for (const { accessory, total } of chosen.values()) {
+  for (const { accessory, quantity } of selection) {
+    if (seen.has(accessory.id)) {
+      return err({ code: "duplicate-accessory", accessoryId: accessory.id });
+    }
+    seen.add(accessory.id);
+    if (quantity === 0) continue;
     if (!isCompatible(accessory, bike)) {
       return err({
         code: "incompatible-accessory",
@@ -69,15 +73,15 @@ export function createBundle(
         frameType: bike.frameType,
       });
     }
-    if (total > accessory.maxAmount) {
+    if (quantity > accessory.maxAmount) {
       return err({
         code: "quantity-out-of-range",
         accessoryId: accessory.id,
-        quantity: total,
+        quantity,
         maxAmount: accessory.maxAmount,
       });
     }
-    accessories.push({ accessory, quantity: total as Quantity });
+    accessories.push({ accessory, quantity });
   }
 
   const bundle: BundleContents = { bike, accessories };
