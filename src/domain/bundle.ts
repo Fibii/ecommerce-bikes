@@ -43,9 +43,7 @@ export type DuplicateAccessory = {
 };
 
 export type BundleError =
-  | IncompatibleAccessory
-  | QuantityOutOfRange
-  | DuplicateAccessory;
+  IncompatibleAccessory | QuantityOutOfRange | DuplicateAccessory;
 
 /**
  * Builds a bundle from a bike and accessory quantities (0..maxAmount).
