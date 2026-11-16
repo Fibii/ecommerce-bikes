@@ -35,7 +35,7 @@ The stock service reads `STOCK_FAILURE_RATE` (default `0.1`), `STOCK_LATENCY_MIN
 
 ### End-to-end tests
 
-`npm run test:e2e` starts two servers from the same build: one whose stock service never fails (port 3000) and one whose stock service always fails (port 3001). That makes the failure path reproducible without a test hook in production code ([A8](docs/decisions/0001-architecture.md#a8-the-simulated-stock-service)). Four tests cover the happy path (configure, add to cart, order, confirmed), an incompatible accessory shown disabled with its reason, a stock shortfall at checkout, and the stock service being down. Install the browser once with `npx playwright install chromium`. CI runs them in their own job.
+`npm run test:e2e` starts two servers from the same build: one whose stock service never fails (port 3000) and one whose stock service always fails (port 3001). That makes the failure path reproducible without a test hook in production code ([A8](docs/decisions/0001-architecture.md#a8-the-simulated-stock-service)). Four tests cover the happy path (configure, add to cart, order, confirmed), an incompatible accessory shown disabled with its reason, a stock shortfall at checkout, and the stock service being down, plus a home page smoke test. Install the browser once with `npx playwright install chromium`. CI runs them in their own job.
 
 ## Architecture in short
 
