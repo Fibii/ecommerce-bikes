@@ -53,8 +53,8 @@ export type CheckoutResult =
  * The reservation is the decision, and a write: a failed one is not retried,
  * because the stock service may or may not have applied it. A reservation
  * that does not answer in time counts as `stock-unavailable`; if the customer
- * tries again, the late answer of the first call is used, not a second
- * reservation. Any failure leaves the cart as it was.
+ * tries again, a new reservation is made. Any failure leaves the cart as it
+ * was.
  *
  * Only a confirmed order is remembered under the idempotency key, so a
  * double submit does not reserve twice and "try again" can still succeed.
@@ -77,11 +77,7 @@ async function placeOrder(
   const cart = await loadCart(deps, id);
   if (cart.lines.length === 0) return { status: "cart-empty" };
 
-  const reservation = await withTimeout(
-    reserveOnce(deps, cart),
-    RESERVE_TIMEOUT_MS,
-    err({ code: "stock-unavailable" as const }),
-  );
+  const reservation = await reserveOnce(deps, cart);
   if (!reservation.ok) {
     return reservation.error.code === "shortfall"
       ? { status: "shortfall", items: reservation.error.items }
@@ -106,18 +102,23 @@ async function placeOrder(
 }
 
 /**
- * Reserves the cart's items at most once while that is in doubt. The call is
- * kept under a key of the cart and its lines, so a retry sent after the first
- * one timed out joins the call that is still running, or gets its stored
- * success, instead of reserving a second time. A failed call is forgotten and
- * can be tried again. Line ids are never reused, so a later purchase of the
- * same products is a different key.
+ * Reserves the cart's items once per cart and lines while a call is running or
+ * has succeeded: a duplicate sent meanwhile joins the running call, and a
+ * success is returned again instead of reserving a second time. The timeout is
+ * part of the call, so a failed or timed-out reservation is forgotten and a
+ * retry makes a fresh one. Line ids are never reused, so a later purchase of
+ * the same products is a different key.
  */
 function reserveOnce(deps: CheckoutDeps, cart: Cart) {
   const lines = cart.lines.map((line) => line.id).join(",");
   return deps.idempotency.run(
     `reserve:${cart.id}:${lines}`,
-    () => deps.stock.reserve(itemsToReserve(cart)),
+    () =>
+      withTimeout(
+        deps.stock.reserve(itemsToReserve(cart)),
+        RESERVE_TIMEOUT_MS,
+        err({ code: "stock-unavailable" as const }),
+      ),
     (reservation) => reservation.ok,
   );
 }
