@@ -88,6 +88,8 @@ const eslintConfig = defineConfig([
                 "@/ui/*",
                 "@/server/*",
                 "@/contracts/*",
+                "@/application/*",
+                "!@/application/ports",
               ],
               message:
                 "Adapters import the domain and application ports, not the framework or other layers.",
