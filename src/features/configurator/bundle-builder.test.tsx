@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -171,8 +172,10 @@ it("ignores a stale availability answer that arrives after a newer one", async (
 
   answers[1]?.({ b1: 9, b2: 9, a1: 9, a2: 9 });
   await screen.findAllByText("In stock");
-  answers[0]?.({ b1: 1, b2: 1, a1: 1, a2: 1 });
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await act(async () => {
+    answers[0]?.({ b1: 1, b2: 1, a1: 1, a2: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 
   expect(screen.queryAllByText("Only 1 left")).toHaveLength(0);
   expect(screen.getAllByText("In stock").length).toBeGreaterThan(0);
