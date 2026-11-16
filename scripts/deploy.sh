@@ -1,37 +1,38 @@
 #!/usr/bin/env bash
-# Deploys the bike configurator as ONE Docker container on this host.
+# Deploys the bike configurator to Google Cloud Run with `gcloud run deploy --source .`
+# (Cloud Build builds the Dockerfile, Artifact Registry stores the image).
 #
 # SINGLE INSTANCE ONLY. Carts, stock reservations and idempotency keys live in
 # process memory, so two instances would each hold different carts and stock.
-# Never run several replicas, never put this on serverless. This script keeps
-# one container named "$NAME" and replaces it on every deploy.
+# The service is pinned to --min-instances=1 --max-instances=1 and
+# --no-cpu-throttling (the instance stays warm and keeps CPU between requests).
+# Any new revision or restart replaces the process and LOSES ALL CARTS.
 #
-# Usage: scripts/deploy.sh [--dry-run] [--tag TAG] [--help]
-#   --dry-run  print the steps without running docker
-#   --tag TAG  deploy this image tag instead of the git short sha
+# Usage: scripts/deploy.sh [--dry-run] [--help]
+#   --dry-run  print the steps without calling gcloud or curl
 #
-# Environment (all optional):
-#   PORT=3000            host and container port
-#   REVALIDATE_SECRET    enables POST /api/revalidate (unset: endpoint refuses)
+# Environment:
+#   PROJECT (required)   GCP project id
+#   REGION  (required)   Cloud Run region, e.g. europe-west1
+#   SERVICE=bikes        Cloud Run service name
+#   REVALIDATE_SECRET    enables POST /api/revalidate (unset: endpoint refuses);
+#                        prefer Secret Manager, see README
 #   STOCK_FAILURE_RATE, STOCK_LATENCY_MIN_MS, STOCK_LATENCY_MAX_MS, STOCK_SEED
-#   APP_NAME=bikes       container and image name
-#   HEALTH_TIMEOUT=60    seconds to wait for the container to become healthy
+#   HEALTH_TIMEOUT=60    seconds to wait for GET /api/health after the deploy
 #
-# HTTPS required: the cart cookie is Secure in production, so browsers drop it
-# over plain http (except on localhost). Serve the app behind a reverse proxy or
-# a platform that terminates TLS. Testing over http://localhost works.
+# HTTPS is provided by Cloud Run. The cart cookie is Secure in production, so
+# browsers drop it over plain http (except on localhost): never front the
+# service with plain http.
 #
-# Rollback: the previously running image ID is recorded before the swap. If the
-# new container is not healthy within HEALTH_TIMEOUT, it is removed and the
-# previous image is started again and health-checked. Memory state (carts) is
-# lost on any swap.
+# Rollback: the latest ready revision is recorded before deploying. If the
+# deploy fails, Cloud Run keeps serving that revision. If it succeeds but
+# GET /api/health on the service URL is not OK within HEALTH_TIMEOUT, traffic is
+# shifted back with `gcloud run services update-traffic --to-revisions=<previous>=100`.
 set -euo pipefail
 
-NAME="${APP_NAME:-bikes}"
-PORT="${PORT:-3000}"
+SERVICE="${SERVICE:-bikes}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-60}"
 DRY_RUN=0
-TAG=""
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
 die() { echo "deploy: $*" >&2; exit 2; }
@@ -39,76 +40,64 @@ die() { echo "deploy: $*" >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
-    --tag)
-      [ $# -ge 2 ] || die "--tag needs a value"
-      TAG="$2"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1 (try --help)" ;;
   esac
   shift
 done
 
-case "$PORT" in ''|*[!0-9]*) die "PORT must be a number, got '$PORT'" ;; esac
+[ -n "${PROJECT:-}" ] || die "PROJECT is required (GCP project id)"
+[ -n "${REGION:-}" ] || die "REGION is required (e.g. europe-west1)"
 case "$HEALTH_TIMEOUT" in ''|*[!0-9]*) die "HEALTH_TIMEOUT must be a number" ;; esac
 
-if [ -z "$TAG" ]; then
-  TAG="$(git rev-parse --short HEAD 2>/dev/null)" || die "not a git checkout; pass --tag"
-fi
-IMAGE="$NAME:$TAG"
-
-run() {
-  if [ "$DRY_RUN" = 1 ]; then echo "+ $*"; else "$@"; fi
-}
-
-env_args=(-e "PORT=$PORT")
+# Env vars for the service. "^@^" makes @ the list separator, so values may
+# contain commas.
+env_list=""
 for var in REVALIDATE_SECRET STOCK_FAILURE_RATE STOCK_LATENCY_MIN_MS STOCK_LATENCY_MAX_MS STOCK_SEED; do
-  [ -z "${!var:-}" ] || env_args+=(-e "$var")
+  [ -z "${!var:-}" ] || env_list="${env_list:+$env_list@}$var=${!var}"
 done
 
-start() { # image
-  run docker run -d --name "$NAME" --restart unless-stopped \
-    -p "$PORT:$PORT" "${env_args[@]}" "$1"
-}
+gc=(gcloud --project "$PROJECT" --quiet)
+deploy_args=(run deploy "$SERVICE" --source . --region "$REGION"
+  --allow-unauthenticated
+  --min-instances=1 --max-instances=1 --concurrency=80 --no-cpu-throttling)
+[ -z "$env_list" ] || deploy_args+=(--set-env-vars "^@^$env_list")
 
-wait_healthy() {
-  [ "$DRY_RUN" = 1 ] && { echo "+ wait up to ${HEALTH_TIMEOUT}s for $NAME to report healthy"; return 0; }
-  local waited=0 status
-  while [ "$waited" -lt "$HEALTH_TIMEOUT" ]; do
-    status="$(docker inspect -f '{{.State.Health.Status}}' "$NAME" 2>/dev/null || echo missing)"
-    [ "$status" = healthy ] && return 0
-    [ "$status" = unhealthy ] && return 1
-    sleep 2; waited=$((waited + 2))
-  done
-  return 1
-}
-
-previous=""
 if [ "$DRY_RUN" = 1 ]; then
-  echo "+ previous=\$(docker inspect -f '{{.Image}}' $NAME)  # remembered for rollback"
-else
-  previous="$(docker inspect -f '{{.Image}}' "$NAME" 2>/dev/null || true)"
-fi
-
-run docker build -t "$IMAGE" .
-if [ "$DRY_RUN" = 1 ]; then echo "+ docker rm -f $NAME  # if present"; else docker rm -f "$NAME" >/dev/null 2>&1 || true; fi
-start "$IMAGE"
-
-if wait_healthy; then
-  [ "$DRY_RUN" = 1 ] && echo "deploy: dry run, nothing was run" || echo "deploy: $IMAGE is healthy on port $PORT"
+  masked=("${deploy_args[@]}")
+  for i in "${!masked[@]}"; do
+    case "${masked[$i]}" in "^@^"*) masked[i]="^@^<${env_list//=*/}...>" ;; esac
+  done
+  echo "+ previous=\$(${gc[*]} run services describe $SERVICE --region $REGION --format='value(status.latestReadyRevisionName)')  # remembered for rollback"
+  echo "+ ${gc[*]} ${masked[*]}"
+  echo "+ url=\$(${gc[*]} run services describe $SERVICE --region $REGION --format='value(status.url)')"
+  echo "+ curl -fsS \$url/api/health  # retry up to ${HEALTH_TIMEOUT}s"
+  echo "+ on failure: ${gc[*]} run services update-traffic $SERVICE --region $REGION --to-revisions=<previous>=100"
+  echo "deploy: dry run, nothing was run"
   exit 0
 fi
 
-echo "deploy: $IMAGE did not become healthy; rolling back" >&2
-docker logs --tail 30 "$NAME" >&2 || true
-docker rm -f "$NAME" >/dev/null 2>&1 || true
-if [ -n "$previous" ]; then
-  start "$previous"
-  if wait_healthy; then
-    echo "deploy: rolled back to previous image $previous" >&2
-  else
-    echo "deploy: rollback to $previous is NOT healthy" >&2
+previous="$("${gc[@]}" run services describe "$SERVICE" --region "$REGION" \
+  --format='value(status.latestReadyRevisionName)' 2>/dev/null || true)"
+
+# A failed deploy leaves the previous revision serving traffic.
+"${gc[@]}" "${deploy_args[@]}" || { echo "deploy: gcloud deploy failed; Cloud Run keeps serving ${previous:-nothing}" >&2; exit 1; }
+
+url="$("${gc[@]}" run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"
+waited=0
+while [ "$waited" -lt "$HEALTH_TIMEOUT" ]; do
+  if curl -fsS --max-time 5 -o /dev/null "$url/api/health"; then
+    echo "deploy: $SERVICE is healthy at $url"
+    exit 0
   fi
+  sleep 3; waited=$((waited + 3))
+done
+
+echo "deploy: $url/api/health is not healthy; rolling back" >&2
+if [ -n "$previous" ]; then
+  "${gc[@]}" run services update-traffic "$SERVICE" --region "$REGION" --to-revisions="$previous=100"
+  echo "deploy: traffic shifted back to $previous" >&2
 else
-  echo "deploy: no previous container to roll back to" >&2
+  echo "deploy: no previous revision to roll back to" >&2
 fi
 exit 1

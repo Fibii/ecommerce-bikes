@@ -6,37 +6,46 @@ import assert from "node:assert/strict";
 const run = (args, env = {}) =>
   spawnSync("bash", ["scripts/deploy.sh", ...args], {
     encoding: "utf8",
-    env: { ...process.env, APP_NAME: "", ...env },
+    env: { PATH: process.env.PATH, ...env },
   });
+const base = { PROJECT: "my-proj", REGION: "europe-west1" };
 
-test("--dry-run prints the steps and runs no docker", () => {
-  const r = run(["--dry-run", "--tag", "abc123"], {
-    PORT: "4000",
-    STOCK_SEED: "x",
-  });
+test("--dry-run prints the single-instance Cloud Run deploy", () => {
+  const r = run(["--dry-run"], { ...base, SERVICE: "shop", STOCK_SEED: "x" });
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /docker build -t bikes:abc123 \./);
-  assert.match(r.stdout, /--restart unless-stopped/);
-  assert.match(r.stdout, /-p 4000:4000/);
-  assert.match(r.stdout, /-e STOCK_SEED/);
-  assert.doesNotMatch(r.stdout, /REVALIDATE_SECRET/);
+  assert.match(r.stdout, /--project my-proj/);
+  assert.match(r.stdout, /run deploy shop --source \. --region europe-west1/);
+  for (const flag of [
+    "--min-instances=1",
+    "--max-instances=1",
+    "--no-cpu-throttling",
+  ]) {
+    assert.ok(r.stdout.includes(flag), flag);
+  }
+  assert.match(r.stdout, /update-traffic shop .*--to-revisions=<previous>=100/);
 });
 
-test("the default tag is the git short sha", () => {
-  const r = run(["--dry-run"]);
+test("--dry-run never prints the revalidate secret", () => {
+  const r = run(["--dry-run"], { ...base, REVALIDATE_SECRET: "s3cret" });
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /docker build -t bikes:[0-9a-f]{7,} \./);
+  assert.doesNotMatch(r.stdout, /s3cret/);
+  assert.match(r.stdout, /--set-env-vars/);
 });
 
-test("rejects unknown arguments", () => {
-  const r = run(["--nope"]);
+test("the service name defaults to bikes", () => {
+  assert.match(run(["--dry-run"], base).stdout, /run deploy bikes /);
+});
+
+test("requires PROJECT and REGION", () => {
+  assert.equal(run(["--dry-run"], { REGION: "r" }).status, 2);
+  assert.equal(run(["--dry-run"], { PROJECT: "p" }).status, 2);
+});
+
+test("rejects unknown arguments and a bad HEALTH_TIMEOUT", () => {
+  const r = run(["--nope"], base);
   assert.equal(r.status, 2);
   assert.match(r.stderr, /unknown argument/);
-});
-
-test("rejects a missing --tag value and a bad PORT", () => {
-  assert.equal(run(["--tag"]).status, 2);
-  assert.equal(run(["--dry-run"], { PORT: "abc" }).status, 2);
+  assert.equal(run(["--dry-run"], { ...base, HEALTH_TIMEOUT: "x" }).status, 2);
 });
 
 test("--help prints usage and exits 0", () => {
