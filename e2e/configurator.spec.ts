@@ -8,7 +8,10 @@ const BIKE = "Touring Voyager 5.0";
 
 async function chooseBike(page: Page) {
   await page.goto("/");
-  await page.getByRole("radio", { name: new RegExp(BIKE) }).check();
+  // The radio input is visually hidden (sr-only); click its visible label.
+  const radio = page.getByRole("radio", { name: new RegExp(BIKE) });
+  await page.locator("label", { has: radio }).click();
+  await expect(radio).toBeChecked();
 }
 
 async function addBundle(page: Page, accessory: string, amount: string) {

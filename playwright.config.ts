@@ -30,6 +30,7 @@ export default defineConfig({
   use: {
     baseURL: `http://localhost:${reliable.port}`,
     trace: "on-first-retry",
+    actionTimeout: 10_000,
   },
   projects: [
     {
